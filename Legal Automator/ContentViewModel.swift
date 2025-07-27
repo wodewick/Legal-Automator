@@ -1,25 +1,23 @@
 import SwiftUI
 import Foundation
-import UniformTypeIdentifiers // <-- Make sure this import is here
+import UniformTypeIdentifiers // <-- This import is important
 
 @MainActor
 class ContentViewModel: ObservableObject {
     @Published var templateURL: URL?
-    // This is now correctly typed as an array of TemplateElement
+    // CORRECTED: This is now an array of [TemplateElement]
     @Published var templateElements: [TemplateElement] = []
     @Published var answers: [String: Any] = [:]
 
     @Published var isLoading = false
     @Published var errorMessage: String?
 
-    // In a real app, this would call your DocxParserService
     private func parseTemplate() {
         guard let url = templateURL else { return }
         
         isLoading = true
         
-        // **MOCK DATA - Correctly typed**
-        // This now correctly creates an array of [TemplateElement]
+        // CORRECTED: This mock data now correctly creates [TemplateElement]
         self.templateElements = [
             .textField(id: UUID(), name: "client_name", label: "Client Name", hint: "e.g., John Smith"),
             .textField(id: UUID(), name: "matter_number", label: "Matter Number", hint: "e.g., 12345"),
@@ -32,7 +30,6 @@ class ContentViewModel: ObservableObject {
             ])
         ]
         
-        // Set a default value for the conditional toggle
         self.answers["is_urgent"] = false
         
         isLoading = false
@@ -42,7 +39,7 @@ class ContentViewModel: ObservableObject {
 
     func selectTemplate() {
         let openPanel = NSOpenPanel()
-        // This now uses the correct syntax for the .docx file type
+        // CORRECTED: This uses the correct UTType for .docx files
         openPanel.allowedContentTypes = [UTType.openXMLWordProcessingMLDocument]
         openPanel.allowsMultipleSelection = false
         openPanel.canChooseDirectories = false
@@ -60,13 +57,11 @@ class ContentViewModel: ObservableObject {
         }
         
         let savePanel = NSSavePanel()
-        // This also uses the correct syntax for the .docx file type
+        // CORRECTED: This also uses the correct UTType
         savePanel.allowedContentTypes = [UTType.openXMLWordProcessingMLDocument]
         savePanel.nameFieldStringValue = "Generated Document.docx"
         
         if savePanel.runModal() == .OK, let outputURL = savePanel.url {
-            // Here you would call your DocxGeneratorService
-            // For now, we'll just print the data.
             print("Generating document at: \(outputURL.path)")
             print("With answers: \(answers)")
         }
