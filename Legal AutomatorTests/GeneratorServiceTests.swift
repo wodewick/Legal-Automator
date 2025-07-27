@@ -50,10 +50,13 @@ final class GeneratorServiceTests: XCTestCase {
           <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
         </Types>
         """
+        let ctData = Data(contentTypes.utf8)
         try archive.addEntry(with: "[Content_Types].xml",
                              type: .file,
-                             uncompressedSize: UInt32(contentTypes.utf8.count),
-                             provider: { Data(contentTypes.utf8) })
+                             uncompressedSize: UInt32(ctData.count),
+                             provider: { position, size in
+                                 ctData.subdata(in: Int(position)..<Int(position + size))
+                             })
 
         // _rels/.rels
         let rels = """
@@ -62,16 +65,22 @@ final class GeneratorServiceTests: XCTestCase {
           <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
         </Relationships>
         """
+        let relsData = Data(rels.utf8)
         try archive.addEntry(with: "_rels/.rels",
                              type: .file,
-                             uncompressedSize: UInt32(rels.utf8.count),
-                             provider: { Data(rels.utf8) })
+                             uncompressedSize: UInt32(relsData.count),
+                             provider: { position, size in
+                                 relsData.subdata(in: Int(position)..<Int(position + size))
+                             })
 
         // word/document.xml
+        let docData = Data(templateXML.utf8)
         try archive.addEntry(with: "word/document.xml",
                              type: .file,
-                             uncompressedSize: UInt32(templateXML.utf8.count),
-                             provider: { Data(templateXML.utf8) })
+                             uncompressedSize: UInt32(docData.count),
+                             provider: { position, size in
+                                 docData.subdata(in: Int(position)..<Int(position + size))
+                             })
 
         return tmpURL
     }
@@ -146,8 +155,19 @@ final class GeneratorServiceTests: XCTestCase {
                                                   destinationURL: tpl.deletingLastPathComponent())
 
         let xml = try mergedXML(from: out)
-        XCTAssertTrue(xml.contains("One"))
-        XCTAssertTrue(xml.contains("Two"))
+
+        // Helper closure to see if a plain string appears contiguously *or*
+        // split across two w:t runs.
+        func containsWord(_ word: String, in rawXML: String) -> Bool {
+            // Matches <w:t>One</w:t> or O</w:t><w:t>ne
+            let pattern = "<w:t[^>]*>\\s*\(word.prefix(1))[^<]*</w:t>(?:\\s*</w:r>\\s*<w:r[^>]*>\\s*<w:t[^>]*>)?\\s*\(word.dropFirst())\\s*</w:t>"
+            return rawXML.range(of: pattern, options: .regularExpression) != nil
+        }
+
+        XCTAssertTrue(containsWord("One", in: xml), "Item 'One' missing")
+        XCTAssertTrue(containsWord("Two", in: xml), "Item 'Two' missing")
+
+        // Still keep the simple bullet‑count heuristic
         XCTAssertEqual(xml.components(separatedBy: "- ").count - 1, 2, "Expected two bullet points")
     }
 }
