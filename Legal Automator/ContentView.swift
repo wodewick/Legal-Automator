@@ -18,7 +18,7 @@ struct ContentView: View {
             Divider()
 
             // Main content area
-            if viewModel.templateURL == nil {
+            if _viewModel.wrappedValue.templateURL == nil {
                 // Show a welcome/selection view if no template is loaded
                 VStack(spacing: 20) {
                     Spacer()
@@ -26,33 +26,36 @@ struct ContentView: View {
                         .font(.largeTitle)
                     Text("Select a .docx template to begin.")
                         .foregroundStyle(.secondary)
-                    Button("Select Template...", action: viewModel.selectTemplate)
+                    Button("Select Template...") { _viewModel.wrappedValue.selectTemplate() }
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 // Show the questionnaire form once a template is loaded
-                QuestionnaireView(elements: viewModel.templateElements, answers: $viewModel.answers)
+                QuestionnaireView(elements: _viewModel.wrappedValue.templateElements, answers: $viewModel.answers)
             }
         }
-        .alert("Error", isPresented: .constant(viewModel.errorMessage != nil), actions: {
-            Button("OK", role: .cancel) { viewModel.errorMessage = nil }
-        }, message: {
-            Text(viewModel.errorMessage ?? "An unknown error occurred.")
-        })
+        .alert("Error", isPresented: Binding(
+            get: { _viewModel.wrappedValue.errorMessage != nil },
+            set: { newValue in if newValue == false { _viewModel.wrappedValue.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { _viewModel.wrappedValue.errorMessage = nil }
+        } message: {
+            Text(_viewModel.wrappedValue.errorMessage ?? "An unknown error occurred.")
+        }
     }
 
     private var headerView: some View {
         HStack {
-            Text(viewModel.templateURL?.lastPathComponent ?? "No Template Selected")
+            Text(_viewModel.wrappedValue.templateURL?.lastPathComponent ?? "No Template Selected")
                 .font(.headline)
                 .lineLimit(1)
                 .truncationMode(.middle)
 
             Spacer()
 
-            Button("Generate Document", action: viewModel.generateDocument)
-                .disabled(viewModel.templateURL == nil)
+            Button("Generate Document") { _viewModel.wrappedValue.generateDocument() }
+                .disabled(_viewModel.wrappedValue.templateURL == nil)
         }
         .padding()
         .frame(height: 55)

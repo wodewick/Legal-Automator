@@ -6,35 +6,31 @@
 //
 
 
+
 import Foundation
 
-/// Minimal model describing a single prompt/field in your template.
-/// Expand this as your template format evolves.
-struct TemplateElement: Identifiable, Hashable, Codable {
-    enum Kind: String, Codable, CaseIterable {
+/// The template model driving the questionnaire UI.
+/// Cases include an `id` as the first associated value so that
+/// pattern matching in views can ignore it with `_` while still
+/// providing stable identity for `ForEach`.
+enum TemplateElement: Identifiable {
+    case textField(id: UUID = UUID(), name: String, label: String, hint: String = "", type: TextFieldType = .text)
+    case conditional(id: UUID = UUID(), name: String, label: String, subElements: [TemplateElement])
+    case repeatingGroup(id: UUID = UUID(), name: String, label: String, templateElements: [TemplateElement])
+    case staticText(id: UUID = UUID(), content: String)
+
+    enum TextFieldType: String, CaseIterable {
         case text
         case number
-        case date
-        case toggle
-        case picker
-        case group
+        case currency
     }
 
-    /// Use a stable id if your source format provides one.
-    var id: UUID = UUID()
-
-    /// Machine key used to store the answer.
-    var key: String
-
-    /// Human-readable label shown in the UI.
-    var prompt: String
-
-    /// Field type.
-    var kind: Kind
-
-    /// For choice fields.
-    var options: [String]? = nil
-
-    /// For grouped/repeating structures.
-    var children: [TemplateElement]? = nil
+    var id: UUID {
+        switch self {
+        case .textField(let id, _, _, _, _): return id
+        case .conditional(let id, _, _, _): return id
+        case .repeatingGroup(let id, _, _, _): return id
+        case .staticText(let id, _): return id
+        }
+    }
 }

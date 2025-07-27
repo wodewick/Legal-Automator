@@ -5,29 +5,35 @@ struct QuestionnaireView: View {
     @Binding var answers: [String: Any]
 
     var body: some View {
-        // Use .grouped for macOS form styling
         Form {
-            ForEach(elements, id: \.id) { element in
-                // Using a helper view to keep the switch statement clean
+            ForEach(elements) { element in
                 view(for: element)
             }
         }
-        .formStyle(.grouped) // Use .grouped for macOS
+        .formStyle(.grouped)
         .padding()
     }
 
-    // This is a view builder function to make the body cleaner
     @ViewBuilder
     private func view(for element: TemplateElement) -> some View {
         switch element {
-        // CORRECTED: Added the missing 'id' parameter (as '_') to match the enum definition
-        case .textField(let name, let label, let hint, let type):
-            // Use a specific view for each text field type
+        case .staticText(_, let content):
+            Text(content)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+        case .textField(_, let name, let label, let hint, let type):
             switch type {
             case .currency:
-                TextField(label, value: currencyBinding(for: name), format: .currency(code: "USD"), prompt: Text(hint))
+                TextField(label,
+                          value: doubleBinding(for: name),
+                          format: .currency(code: Locale.current.currency?.identifier ?? "AUD"),
+                          prompt: Text(hint))
             case .number:
-                TextField(label, value: doubleBinding(for: name), format: .number, prompt: Text(hint))
+                TextField(label,
+                          value: doubleBinding(for: name),
+                          format: .number,
+                          prompt: Text(hint))
             default: // .text
                 TextField(label, text: textBinding(for: name), prompt: Text(hint))
             }
@@ -38,125 +44,83 @@ struct QuestionnaireView: View {
                 QuestionnaireView(elements: subElements, answers: $answers)
                     .padding(.leading)
             }
-            
+
         case .repeatingGroup(_, let name, let label, let templateElements):
-            GroupBox(label) {
-                // Get the binding to the array of answers for this group
-                let groupAnswersBinding = repeatingGroupBinding(for: name)
-                
-                // List each item in the group
-                if !groupAnswersBinding.wrappedValue.isEmpty {
-                    ForEach(groupAnswersBinding) { itemBinding in
-                        HStack {
-                            // Recursively create the form for the item
+            GroupBox {
+                let groupBinding = repeatingArrayBinding(for: name)
+
+                if !groupBinding.wrappedValue.isEmpty {
+                    ForEach(groupBinding.wrappedValue.indices, id: \.self) { index in
+                        HStack(alignment: .top, spacing: 8) {
+                            // Sub-binding to the specific item dictionary
+                            let itemBinding = Binding<[String: Any]>(
+                                get: { groupBinding.wrappedValue[index] },
+                                set: { groupBinding.wrappedValue[index] = $0 }
+                            )
                             QuestionnaireView(elements: templateElements, answers: itemBinding)
-                            
-                            // Remove button for this item
+
                             Button(role: .destructive) {
-                                // Find the index of the item to remove
-                                if let index = answers[name, as: [[String: Any]].self, default: []].firstIndex(where: { $0["id"] as? UUID == itemBinding.wrappedValue["id"] as? UUID }) {
-                                    answers[name, as: [[String: Any]].self]?.remove(at: index)
-                                }
+                                groupBinding.wrappedValue.remove(at: index)
                             } label: {
                                 Image(systemName: "trash")
                             }
                             .buttonStyle(.plain)
                         }
-                        .padding(.vertical, 4)
                         Divider()
                     }
                 }
-                
-                // Add button for the group
+
                 Button("Add \(label)") {
-                    // Append a new empty dictionary with a unique ID
-                    let newItem: [String: Any] = ["id": UUID()]
-                    var currentItems = answers[name, as: [[String: Any]].self, default: []]
-                    currentItems.append(newItem)
-                    answers[name] = currentItems
+                    var arr = groupBinding.wrappedValue
+                    var newItem: [String: Any] = [:]
+                    newItem["id"] = UUID()
+                    arr.append(newItem)
+                    groupBinding.wrappedValue = arr
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            
-        case .staticText(_, let content):
-            Text(content)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            label: {
+                Text(label)
+            }
         }
     }
 
-    // MARK: - Binding Helpers
+    // MARK: - Bindings
 
     private func textBinding(for key: String) -> Binding<String> {
-        return Binding<String>(
-            get: { self.answers[key] as? String ?? "" },
-            set: { self.answers[key] = $0 }
+        Binding<String>(
+            get: { (answers[key] as? String) ?? "" },
+            set: { answers[key] = $0 }
         )
     }
 
     private func boolBinding(for key: String) -> Binding<Bool> {
-        return Binding<Bool>(
-            get: { self.answers[key] as? Bool ?? false },
-            set: { self.answers[key] = $0 }
+        Binding<Bool>(
+            get: { (answers[key] as? Bool) ?? false },
+            set: { answers[key] = $0 }
         )
     }
-    
+
     private func doubleBinding(for key: String) -> Binding<Double> {
-        return Binding<Double>(
-            get: { self.answers[key] as? Double ?? 0.0 },
-            set: { self.answers[key] = $0 }
-        )
-    }
-    
-    private func currencyBinding(for key: String) -> Binding<Double> {
-        // Currency is just a Double, formatted differently by the view
-        return doubleBinding(for: key)
-    }
-    
-    private func repeatingGroupBinding(for key: String) -> Binding<[Binding<[String: Any]>]> {
-        return Binding<[Binding<[String: Any]>]>(
+        Binding<Double>(
             get: {
-                guard let array = self.answers[key] as? [[String: Any]] else { return [] }
-                return array.indices.map { index in
-                    Binding<[String: Any]>(
-                        get: {
-                            guard let array = self.answers[key] as? [[String: Any]], array.indices.contains(index) else { return [:] }
-                            return array[index]
-                        },
-                        set: { newValue in
-                            guard var array = self.answers[key] as? [[String: Any]], array.indices.contains(index) else { return }
-                            array[index] = newValue
-                            self.answers[key] = array
-                        }
-                    )
-                }
+                if let d = answers[key] as? Double { return d }
+                if let s = answers[key] as? String, let d = Double(s) { return d }
+                return 0
             },
-            set: { newBindings in
-                self.answers[key] = newBindings.map { $0.wrappedValue }
-            }
+            set: { answers[key] = $0 }
+        )
+    }
+
+    private func repeatingArrayBinding(for key: String) -> Binding<[[String: Any]]> {
+        Binding<[[String: Any]]>(
+            get: { (answers[key] as? [[String: Any]]) ?? [] },
+            set: { answers[key] = $0 }
         )
     }
 }
 
-// MARK: - Dictionary Extension
-// Helper extension to make accessing typed values in the [String: Any] dictionary safer and cleaner.
+// MARK: - Dictionary typed access helpers (optional)
 extension Dictionary where Key == String, Value == Any {
-    subscript<T>(key: String, as type: T.Type, default defaultValue: @autoclosure () -> T) -> T {
-        get {
-            return (self[key] as? T) ?? defaultValue()
-        }
-        set {
-            self[key] = newValue
-        }
-    }
-    
-    subscript<T>(key: String, as type: T.Type) -> T? {
-        get {
-            return self[key] as? T
-        }
-        set {
-            self[key] = newValue
-        }
-    }
+    subscript<T>(safe key: String, as: T.Type) -> T? { self[key] as? T }
 }
-
