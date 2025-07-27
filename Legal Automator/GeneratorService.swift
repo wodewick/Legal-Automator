@@ -85,6 +85,11 @@ struct GeneratorService {
         }
 
         // ------------------------------------------------------------------
+        //  3a. Coalesce split runs so placeholders are contiguous
+        // ------------------------------------------------------------------
+        xmlString = coalesceRuns(xmlString)
+
+        // ------------------------------------------------------------------
         //  4. Apply replacements
         // ------------------------------------------------------------------
         xmlString = applyReplacements(xmlString, answers: answers)
@@ -205,6 +210,18 @@ struct GeneratorService {
     }
 
     // MARK: - Helpers -------------------------------------------------------
+
+    /// Word sometimes splits placeholder text across multiple runs like
+    /// “… {{cli</w:t></w:r><w:r><w:t>ent_name}} …”.  This helper joins any
+    /// adjacent `</w:t></w:r><w:r … ><w:t … >` sequences so the placeholders
+    /// become contiguous for the regex stages.
+    private func coalesceRuns(_ xml: String) -> String {
+        let pattern = #"</w:t>\s*</w:r>\s*<w:r[^>]*>\s*<w:t[^>]*>"#
+        let rx = try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        return rx.stringByReplacingMatches(in: xml,
+                                           range: NSRange(xml.startIndex..., in: xml),
+                                           withTemplate: "")
+    }
 
     private func escapeXML(_ string: String) -> String {
         return string
