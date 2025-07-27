@@ -1,94 +1,147 @@
-//
-//  QuestionnaireView 2.swift
-//  Legal Automator
-//
-//  Created by Rodney Serkowski on 27/7/2025.
-//
-
-
 import SwiftUI
 
 struct QuestionnaireView: View {
-    @ObservedObject var viewModel: ContentViewModel
+    let elements: [TemplateElement]
+    @Binding var answers: [String: Any]
 
     var body: some View {
-        List {
-            ForEach(viewModel.elements) { element in
-                QuestionnaireRow(element: element,
-                                 textBinding: Binding(
-                                    get: { viewModel.answers[element.key] ?? "" },
-                                    set: { viewModel.answers[element.key] = $0 }
-                                 )
-                )
+        // Use .grouped for macOS form styling
+        Form {
+            ForEach(elements, id: \.id) { element in
+                // Using a helper view to keep the switch statement clean
+                view(for: element)
             }
         }
-        .listStyle(.insetGrouped)
+        .formStyle(.grouped) // Use .grouped for macOS
+        .padding()
     }
-}
 
-// MARK: - Row renderer
+    // This is a view builder function to make the body cleaner
+    @ViewBuilder
+    private func view(for element: TemplateElement) -> some View {
+        switch element {
+        case .textField(let name, let label, let hint, let type):
+            // Use a specific view for each text field type
+            switch type {
+            case .currency:
+                TextField(label, value: currencyBinding(for: name), format: .currency(code: "USD"), prompt: Text(hint))
+            case .number:
+                TextField(label, value: doubleBinding(for: name), format: .number, prompt: Text(hint))
+            default: // .text
+                TextField(label, text: textBinding(for: name), prompt: Text(hint))
+            }
 
-private struct QuestionnaireRow: View {
-    let element: TemplateElement
-
-    /// Minimal binding used for text-like values in this scaffold.
-    /// You will likely replace this with a typed answer store.
-    @Binding var textBinding: String
-
-    var body: some View {
-        switch element.kind {
-        case .text:
-            TextField(element.prompt, text: $textBinding)
-        case .number:
-            TextField(element.prompt, text: $textBinding)
-                .keyboardType(.numbersAndPunctuation)
-        case .date:
-            // Store as ISO string in this scaffold; adapt to your answer model as needed.
-            DatePicker(element.prompt,
-                       selection: Binding(
-                        get: { Self.date(from: textBinding) ?? Date() },
-                        set: { textBinding = Self.iso8601(from: $0) }
-                       ),
-                       displayedComponents: .date)
-        case .toggle:
-            Toggle(element.prompt,
-                   isOn: Binding(
-                    get: { (textBinding as NSString).boolValue },
-                    set: { textBinding = $0 ? "true" : "false" }
-                   )
-            )
-        case .picker:
-            Picker(element.prompt,
-                   selection: Binding(
-                    get: { textBinding },
-                    set: { textBinding = $0 }
-                   )
-            ) {
-                ForEach(element.options ?? [], id: \.self) { option in
-                    Text(option).tag(option)
+        case .conditional(_, let name, let label, let subElements):
+            Toggle(label, isOn: boolBinding(for: name))
+            if boolBinding(for: name).wrappedValue {
+                QuestionnaireView(elements: subElements, answers: $answers)
+                    .padding(.leading)
+            }
+            
+        case .repeatingGroup(_, let name, let label, let templateElements):
+            GroupBox(label) {
+                // Get the binding to the array of answers for this group
+                let groupAnswersBinding = repeatingGroupBinding(for: name)
+                
+                // List each item in the group
+                ForEach(groupAnswersBinding) { itemBinding in
+                    HStack {
+                        // Recursively create the form for the item
+                        QuestionnaireView(elements: templateElements, answers: itemBinding)
+                        
+                        // Remove button for this item
+                        Button(role: .destructive) {
+                            // Find the index of the item to remove
+                            if let index = groupAnswersBinding.wrappedValue.firstIndex(where: { $0.id == itemBinding.wrappedValue.id }) {
+                                answers[name, as: [[String: Any]].self]?.remove(at: index)
+                            }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                
+                // Add button for the group
+                Button("Add \(label)") {
+                    // Append a new empty dictionary with a unique ID
+                    let newItem: [String: Any] = ["id": UUID()]
+                    answers[name, as: [[String: Any]].self, default: []].append(newItem)
                 }
             }
-        case .group:
-            Section(element.prompt) {
-                ForEach(element.children ?? []) { child in
-                    QuestionnaireRow(element: child,
-                                     textBinding: Binding(
-                                        get: { textBinding }, // share or adjust per child key as needed
-                                        set: { textBinding = $0 }
-                                     )
+            
+        case .staticText(_, let content):
+            Text(content)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Binding Helpers
+
+    private func textBinding(for key: String) -> Binding<String> {
+        return Binding<String>(
+            get: { self.answers[key] as? String ?? "" },
+            set: { self.answers[key] = $0 }
+        )
+    }
+
+    private func boolBinding(for key: String) -> Binding<Bool> {
+        return Binding<Bool>(
+            get: { self.answers[key] as? Bool ?? false },
+            set: { self.answers[key] = $0 }
+        )
+    }
+    
+    private func doubleBinding(for key: String) -> Binding<Double> {
+        return Binding<Double>(
+            get: { self.answers[key] as? Double ?? 0.0 },
+            set: { self.answers[key] = $0 }
+        )
+    }
+    
+    private func currencyBinding(for key: String) -> Binding<Double> {
+        // Currency is just a Double, formatted differently by the view
+        return doubleBinding(for: key)
+    }
+    
+    private func repeatingGroupBinding(for key: String) -> Binding<[Binding<[String: Any]>]> {
+        return Binding<[Binding<[String: Any]>]>(
+            get: {
+                let array = self.answers[key, as: [[String: Any]].self, default: []]
+                return array.indices.map { index in
+                    Binding<[String: Any]>(
+                        get: { self.answers[key, as: [[String: Any]].self, default: []][index] },
+                        set: { self.answers[key, as: [[String: Any]].self, default: []][index] = $0 }
                     )
                 }
+            },
+            set: { newBindings in
+                self.answers[key] = newBindings.map { $0.wrappedValue }
             }
-        }
-    }
-
-    // MARK: - Helpers
-
-    private static func date(from string: String) -> Date? {
-        ISO8601DateFormatter().date(from: string)
-    }
-
-    private static func iso8601(from date: Date) -> String {
-        ISO8601DateFormatter().string(from: date)
+        )
     }
 }
+
+// MARK: - Dictionary Extension
+// Helper extension to make accessing typed values in the [String: Any] dictionary safer and cleaner.
+extension Dictionary where Key == String, Value == Any {
+    subscript<T>(key: String, as type: T.Type, default defaultValue: @autoclosure () -> T) -> T {
+        get {
+            return (self[key] as? T) ?? defaultValue()
+        }
+        set {
+            self[key] = newValue
+        }
+    }
+    
+    subscript<T>(key: String, as type: T.Type) -> T? {
+        get {
+            return self[key] as? T
+        }
+        set {
+            self[key] = newValue
+        }
+    }
+}
+
