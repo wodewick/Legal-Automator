@@ -3,6 +3,8 @@
 //  Legal Automator
 //
 //  Created by Rodney Serkowski on 27/7/2025.
+//  Updated: 27/7/2025 – migrates to the recursive TemplateElement model and
+//  plugs in ParserService.
 //
 
 import Foundation
@@ -10,35 +12,31 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+/// Top‑level view‑model orchestrating template selection, parsing, and (later)
+/// document generation.
 final class ContentViewModel: ObservableObject {
-    // MARK: - Template state
-    @Published var templateURL: URL? = nil
-    @Published var elements: [TemplateElement] = []
+
+    // MARK: Dependencies
+    private let parser = ParserService()
+
+    // MARK: Template state
+    @Published var templateURL: URL?
+    @Published private(set) var elements: [TemplateElement] = [
+        .plainText(content: "Select a template to begin.")
+    ]
+    /// Answers keyed by variable / group name.  GeneratorService will consume
+    /// this in Milestone 2.
     @Published var answers: [String: Any] = [:]
 
-    // Surface simple user-visible errors
-    @Published var errorMessage: String? = nil
+    // MARK: UI feedback
+    @Published var errorMessage: String?
 
-    // For compatibility with existing views expecting `templateElements`
+    /// Back‑compat shim: some older views still reference `templateElements`.
     var templateElements: [TemplateElement] { elements }
 
-    init() {
-        // Seed demo elements so the UI renders before a template is chosen
-        self.elements = [
-            .staticText(content: "Please complete the questionnaire below."),
-            .textField(name: "client_name", label: "Client Name", hint: "Full legal name", type: .text),
-            .textField(name: "matter_value", label: "Matter Value", hint: "e.g. 150000", type: .number),
-            .textField(name: "review_date", label: "Review Date", hint: "YYYY-MM-DD", type: .text),
-            .textField(name: "urgent", label: "Urgent?", hint: "true/false", type: .text),
-            .textField(name: "category", label: "Category", hint: "Conveyancing / Wills / Litigation", type: .text),
-            .repeatingGroup(name: "declarations", label: "Declarations", templateElements: [
-                .textField(name: "decl1", label: "Declaration 1", hint: "", type: .text),
-                .textField(name: "decl2", label: "Declaration 2", hint: "", type: .text)
-            ])
-        ]
-    }
+    // MARK: User actions ----------------------------------------------------
 
-    // MARK: - Actions
+    /// Show an Open dialog so the operator can choose a *.docx* template.
     func selectTemplate() {
         let panel = NSOpenPanel()
         if #available(macOS 12.0, *) {
@@ -48,45 +46,38 @@ final class ContentViewModel: ObservableObject {
         }
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.title = "Select a .docx template"
+        panel.title = "Select a .docx template"
+
         if panel.runModal() == .OK, let url = panel.url {
-            self.templateURL = url
-            do {
-                try loadTemplate(from: url)
-            } catch {
-                self.errorMessage = "Failed to load template: \(error.localizedDescription)"
-            }
+            openTemplate(at: url)
         }
     }
 
+    /// Merge `answers` into `templateURL` to produce an output document.
+    /// (Implementation arrives with Milestone 2.)
     func generateDocument() {
-        // Placeholder generation logic; integrate your real merge pipeline here
         guard templateURL != nil else {
             errorMessage = "Please select a template before generating a document."
             return
         }
-        // In a real implementation, perform the merge and write out a file.
-        // For now, just indicate success.
+        // TODO: integrate GeneratorService
         errorMessage = nil
     }
 
-    // Open a template directly from a dropped file URL (or programmatic open)
+    // MARK: Internal helpers -----------------------------------------------
+
+    /// Called by Open‑panel or drag‑and‑drop.
     func openTemplate(at url: URL) {
         let needsStop = url.startAccessingSecurityScopedResource()
         defer { if needsStop { url.stopAccessingSecurityScopedResource() } }
 
-        self.templateURL = url
+        templateURL = url
         do {
-            try loadTemplate(from: url)
+            elements = try parser.parse(templateURL: url)
+            errorMessage = nil
         } catch {
-            self.errorMessage = "Failed to load template: \(error.localizedDescription)"
+            elements = [.plainText(content: "Failed to load template.")]
+            errorMessage = "Failed to load template: \(error.localizedDescription)"
         }
-    }
-
-    // MARK: - Parsing (stub)
-    private func loadTemplate(from url: URL) throws {
-        // TODO: Parse `url` to populate `elements`.
-        // This stub keeps the seeded elements. Replace with real parsing.
-        // If parsing fails, throw an error.
     }
 }
