@@ -21,7 +21,7 @@ struct QuestionnaireView: View {
     private func view(for element: TemplateElement) -> some View {
         switch element {
         // CORRECTED: Added the missing 'id' parameter (as '_') to match the enum definition
-        case .textField(_, let name, let label, let hint, let type):
+        case .textField(let name, let label, let hint, let type):
             // Use a specific view for each text field type
             switch type {
             case .currency:
