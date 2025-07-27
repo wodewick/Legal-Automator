@@ -11,24 +11,6 @@ import ZIPFoundation
 
 // MARK: - Template model ----------------------------------------------------
 
-enum TemplateElement: Identifiable, Hashable {
-
-    case plainText(id: UUID, content: String)
-    case variable(id: UUID, name: String, label: String?, hint: String?)
-    case conditional(id: UUID, name: String, label: String?, elements: [TemplateElement])
-    case repeatingGroup(id: UUID, group: String, label: String?, templateElements: [TemplateElement])
-
-    var id: UUID {
-        switch self {
-        case .plainText(let id, _),
-             .variable(let id, _, _, _),
-             .conditional(let id, _, _, _),
-             .repeatingGroup(let id, _, _, _):
-            return id
-        }
-    }
-}
-
 // MARK: - Service errors ----------------------------------------------------
 
 enum ParserError: Error, LocalizedError {
@@ -55,6 +37,21 @@ enum ParserError: Error, LocalizedError {
 
 final class ParserService {
 
+    // MARK: - Parsing helpers ---------------------------------------------
+    private struct StackFrame {
+        var elements: [TemplateElement] = []
+        var context: Context
+
+        enum Context {
+            case root
+            case conditional(name: String, label: String?)
+            case repeating(group: String, label: String?)
+        }
+    }
+
+    /// Simple enum used only to indicate the kind of closing tag encountered.
+    private enum ClosingTag { case conditional, repeating }
+
     // Public API ------------------------------------------------------------
 
     /// Parses the provided .docx template and returns a nested element tree.
@@ -73,7 +70,10 @@ final class ParserService {
     // Private helpers -------------------------------------------------------
 
     private func extractXML(from url: URL) throws -> String {
-        guard let archive = Archive(url: url, accessMode: .read) else {
+        let archive: Archive
+        do {
+            archive = try Archive(url: url, accessMode: .read)
+        } catch {
             throw ParserError.notADocx
         }
         guard let entry = archive["word/document.xml"] else {
@@ -100,13 +100,6 @@ final class ParserService {
         let ifCloseRX   = try NSRegularExpression(pattern: #"\[\[END\s+IF\]\]"#)
         let repOpenRX   = try NSRegularExpression(pattern: #"\[\[REPEAT\s+FOR\s+([^\]]+)\]\]"#)
         let repCloseRX  = try NSRegularExpression(pattern: #"\[\[END\s+REPEAT\]\]"#)
-
-        // Helpers -----------------------------------------------------------
-        struct StackFrame {
-            var elements: [TemplateElement] = []
-            var context: Context
-            enum Context { case root, conditional(name: String, label: String?), repeating(group: String, label: String?) }
-        }
 
         var stack: [StackFrame] = [StackFrame(context: .root)]
         var cursor = text.startIndex
@@ -216,7 +209,7 @@ final class ParserService {
         return (name, label)
     }
 
-    private func closeContext(expect expected: StackFrame.Context, stack: inout [StackFrame]) throws {
+    private func closeContext(expect expected: ClosingTag, stack: inout [StackFrame]) throws {
         guard stack.count > 1 else {
             throw ParserError.invalidTemplate(reason: "Unexpected closing tag")
         }

@@ -17,42 +17,39 @@ struct QuestionnaireView: View {
     @ViewBuilder
     private func view(for element: TemplateElement) -> some View {
         switch element {
-        case .staticText(_, let content):
+
+        // MARK: - Plain text
+
+        case .plainText(_, let content):
             Text(content)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-        case .textField(_, let name, let label, let hint, let type):
-            switch type {
-            case .currency:
-                TextField(label,
-                          value: doubleBinding(for: name),
-                          format: .currency(code: Locale.current.currency?.identifier ?? "AUD"),
-                          prompt: Text(hint))
-            case .number:
-                TextField(label,
-                          value: doubleBinding(for: name),
-                          format: .number,
-                          prompt: Text(hint))
-            default: // .text
-                TextField(label, text: textBinding(for: name), prompt: Text(hint))
-            }
+        // MARK: - Single‑value variable
 
-        case .conditional(_, let name, let label, let subElements):
-            Toggle(label, isOn: boolBinding(for: name))
+        case .variable(_, let name, let labelOpt, let hintOpt):
+            TextField(labelOpt ?? name.capitalized,
+                      text: textBinding(for: name),
+                      prompt: Text(hintOpt ?? ""))
+
+        // MARK: - Conditional section
+
+        case .conditional(_, let name, let labelOpt, let elements):
+            Toggle(labelOpt ?? name.capitalized, isOn: boolBinding(for: name))
             if boolBinding(for: name).wrappedValue {
-                QuestionnaireView(elements: subElements, answers: $answers)
+                QuestionnaireView(elements: elements, answers: $answers)
                     .padding(.leading)
             }
 
-        case .repeatingGroup(_, let name, let label, let templateElements):
+        // MARK: - Repeating group
+
+        case .repeatingGroup(_, let group, let labelOpt, let templateElements):
             GroupBox {
-                let groupBinding = repeatingArrayBinding(for: name)
+                let groupBinding = repeatingArrayBinding(for: group)
 
                 if !groupBinding.wrappedValue.isEmpty {
                     ForEach(groupBinding.wrappedValue.indices, id: \.self) { index in
                         HStack(alignment: .top, spacing: 8) {
-                            // Sub-binding to the specific item dictionary
                             let itemBinding = Binding<[String: Any]>(
                                 get: { groupBinding.wrappedValue[index] },
                                 set: { groupBinding.wrappedValue[index] = $0 }
@@ -70,7 +67,7 @@ struct QuestionnaireView: View {
                     }
                 }
 
-                Button("Add \(label)") {
+                Button("Add \(labelOpt ?? group)") {
                     var arr = groupBinding.wrappedValue
                     var newItem: [String: Any] = [:]
                     newItem["id"] = UUID()
@@ -78,9 +75,8 @@ struct QuestionnaireView: View {
                     groupBinding.wrappedValue = arr
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-            label: {
-                Text(label)
+            } label: {
+                Text(labelOpt ?? group)
             }
         }
     }
