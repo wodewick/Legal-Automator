@@ -20,7 +20,8 @@ struct QuestionnaireView: View {
     @ViewBuilder
     private func view(for element: TemplateElement) -> some View {
         switch element {
-        case .textField(let name, let label, let hint, let type):
+        // CORRECTED: Added the missing 'id' parameter (as '_') to match the enum definition
+        case .textField(_, let name, let label, let hint, let type):
             // Use a specific view for each text field type
             switch type {
             case .currency:
@@ -44,21 +45,25 @@ struct QuestionnaireView: View {
                 let groupAnswersBinding = repeatingGroupBinding(for: name)
                 
                 // List each item in the group
-                ForEach(groupAnswersBinding) { itemBinding in
-                    HStack {
-                        // Recursively create the form for the item
-                        QuestionnaireView(elements: templateElements, answers: itemBinding)
-                        
-                        // Remove button for this item
-                        Button(role: .destructive) {
-                            // Find the index of the item to remove
-                            if let index = groupAnswersBinding.wrappedValue.firstIndex(where: { $0.id == itemBinding.wrappedValue.id }) {
-                                answers[name, as: [[String: Any]].self]?.remove(at: index)
+                if !groupAnswersBinding.wrappedValue.isEmpty {
+                    ForEach(groupAnswersBinding) { itemBinding in
+                        HStack {
+                            // Recursively create the form for the item
+                            QuestionnaireView(elements: templateElements, answers: itemBinding)
+                            
+                            // Remove button for this item
+                            Button(role: .destructive) {
+                                // Find the index of the item to remove
+                                if let index = answers[name, as: [[String: Any]].self, default: []].firstIndex(where: { $0["id"] as? UUID == itemBinding.wrappedValue["id"] as? UUID }) {
+                                    answers[name, as: [[String: Any]].self]?.remove(at: index)
+                                }
+                            } label: {
+                                Image(systemName: "trash")
                             }
-                        } label: {
-                            Image(systemName: "trash")
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
+                        .padding(.vertical, 4)
+                        Divider()
                     }
                 }
                 
@@ -66,8 +71,11 @@ struct QuestionnaireView: View {
                 Button("Add \(label)") {
                     // Append a new empty dictionary with a unique ID
                     let newItem: [String: Any] = ["id": UUID()]
-                    answers[name, as: [[String: Any]].self, default: []].append(newItem)
+                    var currentItems = answers[name, as: [[String: Any]].self, default: []]
+                    currentItems.append(newItem)
+                    answers[name] = currentItems
                 }
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
             
         case .staticText(_, let content):
@@ -108,11 +116,18 @@ struct QuestionnaireView: View {
     private func repeatingGroupBinding(for key: String) -> Binding<[Binding<[String: Any]>]> {
         return Binding<[Binding<[String: Any]>]>(
             get: {
-                let array = self.answers[key, as: [[String: Any]].self, default: []]
+                guard let array = self.answers[key] as? [[String: Any]] else { return [] }
                 return array.indices.map { index in
                     Binding<[String: Any]>(
-                        get: { self.answers[key, as: [[String: Any]].self, default: []][index] },
-                        set: { self.answers[key, as: [[String: Any]].self, default: []][index] = $0 }
+                        get: {
+                            guard let array = self.answers[key] as? [[String: Any]], array.indices.contains(index) else { return [:] }
+                            return array[index]
+                        },
+                        set: { newValue in
+                            guard var array = self.answers[key] as? [[String: Any]], array.indices.contains(index) else { return }
+                            array[index] = newValue
+                            self.answers[key] = array
+                        }
                     )
                 }
             },
