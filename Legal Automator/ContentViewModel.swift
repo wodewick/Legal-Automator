@@ -1,20 +1,14 @@
-//
-//  ContentViewModel.swift
-//  Legal Automator
-//
-//  Created by Rodney Serkowski on 27/7/2025.
-//
-
-
 import SwiftUI
 import Foundation
+import UniformTypeIdentifiers // <-- Make sure this import is here
 
 @MainActor
 class ContentViewModel: ObservableObject {
     @Published var templateURL: URL?
+    // This is now correctly typed as an array of TemplateElement
     @Published var templateElements: [TemplateElement] = []
     @Published var answers: [String: Any] = [:]
-    
+
     @Published var isLoading = false
     @Published var errorMessage: String?
 
@@ -24,9 +18,8 @@ class ContentViewModel: ObservableObject {
         
         isLoading = true
         
-        // **MOCK DATA FOR NOW**
-        // This simulates a parsed template so you can build the UI.
-        // Replace this with your actual parsing logic later.
+        // **MOCK DATA - Correctly typed**
+        // This now correctly creates an array of [TemplateElement]
         self.templateElements = [
             .textField(id: UUID(), name: "client_name", label: "Client Name", hint: "e.g., John Smith"),
             .textField(id: UUID(), name: "matter_number", label: "Matter Number", hint: "e.g., 12345"),
@@ -49,7 +42,8 @@ class ContentViewModel: ObservableObject {
 
     func selectTemplate() {
         let openPanel = NSOpenPanel()
-        openPanel.allowedContentTypes = [.openXMLWordProcessing] // .docx
+        // This now uses the correct syntax for the .docx file type
+        openPanel.allowedContentTypes = [UTType.openXMLWordProcessingMLDocument]
         openPanel.allowsMultipleSelection = false
         openPanel.canChooseDirectories = false
         
@@ -66,7 +60,8 @@ class ContentViewModel: ObservableObject {
         }
         
         let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [.openXMLWordProcessing]
+        // This also uses the correct syntax for the .docx file type
+        savePanel.allowedContentTypes = [UTType.openXMLWordProcessingMLDocument]
         savePanel.nameFieldStringValue = "Generated Document.docx"
         
         if savePanel.runModal() == .OK, let outputURL = savePanel.url {

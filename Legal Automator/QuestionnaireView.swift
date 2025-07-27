@@ -1,20 +1,14 @@
-//
-//  QuestionnaireView.swift
-//  Legal Automator
-//
-//  Created by Rodney Serkowski on 27/7/2025.
-//
-
-
 import SwiftUI
 
 struct QuestionnaireView: View {
+    // This is now correctly typed as an array of TemplateElement
     let elements: [TemplateElement]
     @Binding var answers: [String: Any]
 
     var body: some View {
         Form {
-            ForEach(elements) { element in
+            // This now correctly tells the ForEach loop how to identify each element
+            ForEach(elements, id: \.id) { element in
                 switch element {
                 case .textField(_, let name, let label, let hint):
                     TextField(label, text: textBinding(for: name), prompt: Text(hint))
@@ -66,3 +60,4 @@ struct QuestionnaireView: View {
         )
     }
 }
+
