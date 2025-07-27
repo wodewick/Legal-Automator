@@ -9,28 +9,41 @@
 
 import Foundation
 
-/// The template model driving the questionnaire UI.
-/// Cases include an `id` as the first associated value so that
-/// pattern matching in views can ignore it with `_` while still
-/// providing stable identity for `ForEach`.
-enum TemplateElement: Identifiable {
-    case textField(id: UUID = UUID(), name: String, label: String, hint: String = "", type: TextFieldType = .text)
-    case conditional(id: UUID = UUID(), name: String, label: String, subElements: [TemplateElement])
-    case repeatingGroup(id: UUID = UUID(), name: String, label: String, templateElements: [TemplateElement])
-    case staticText(id: UUID = UUID(), content: String)
 
-    enum TextFieldType: String, CaseIterable {
-        case text
-        case number
-        case currency
-    }
+/// Canonical template model shared by ParserService, the UI, and (later)
+/// GeneratorService.  This replaces the earlier flat model.
+public enum TemplateElement: Identifiable, Hashable {
 
-    var id: UUID {
+    /// Literal text that should appear in the questionnaire exactly as-is.
+    case plainText(id: UUID = UUID(), content: String)
+
+    /// A single‐value variable placeholder (e.g. {{ client_name }}).
+    case variable(id: UUID = UUID(),
+                  name: String,
+                  label: String?,
+                  hint: String?)
+
+    /// A conditional block (originating from [[IF …]] … [[END IF]]).
+    case conditional(id: UUID = UUID(),
+                     name: String,
+                     label: String?,
+                     elements: [TemplateElement])
+
+    /// A repeating group block (originating from [[REPEAT FOR …]] … [[END REPEAT]]).
+    case repeatingGroup(id: UUID = UUID(),
+                        group: String,
+                        label: String?,
+                        templateElements: [TemplateElement])
+
+    // MARK: - Identity
+
+    public var id: UUID {
         switch self {
-        case .textField(let id, _, _, _, _): return id
-        case .conditional(let id, _, _, _): return id
-        case .repeatingGroup(let id, _, _, _): return id
-        case .staticText(let id, _): return id
+        case .plainText(let id, _),
+             .variable(let id, _, _, _),
+             .conditional(let id, _, _, _),
+             .repeatingGroup(let id, _, _, _):
+            return id
         }
     }
 }
