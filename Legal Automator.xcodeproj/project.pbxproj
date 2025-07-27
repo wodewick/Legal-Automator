@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		DA412E282E35ECFF00D3E894 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = DA412E272E35ECFF00D3E894 /* ZIPFoundation */; };
-		DA412E3E2E363D4400D3E894 /* ParserServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA412E2F2E363ABB00D3E894 /* ParserServiceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -23,7 +22,6 @@
 
 /* Begin PBXFileReference section */
 		DA412E082E35B01800D3E894 /* Legal Automator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Legal Automator.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		DA412E2F2E363ABB00D3E894 /* ParserServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParserServiceTests.swift; sourceTree = "<group>"; };
 		DA412E352E363B6000D3E894 /* Legal AutomatorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Legal AutomatorTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -62,7 +60,6 @@
 		DA412DFF2E35B01800D3E894 = {
 			isa = PBXGroup;
 			children = (
-				DA412E2F2E363ABB00D3E894 /* ParserServiceTests.swift */,
 				DA412E0A2E35B01800D3E894 /* Legal Automator */,
 				DA412E362E363B6000D3E894 /* Legal AutomatorTests */,
 				DA412E092E35B01800D3E894 /* Products */,
@@ -198,7 +195,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DA412E3E2E363D4400D3E894 /* ParserServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
