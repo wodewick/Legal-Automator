@@ -1,69 +1,48 @@
-import SwiftUI
+//
+//  ContentViewModel 2.swift
+//  Legal Automator
+//
+//  Created by Rodney Serkowski on 27/7/2025.
+//
+
+
 import Foundation
-import UniformTypeIdentifiers // <-- This import is important
+import SwiftUI
 
-@MainActor
-class ContentViewModel: ObservableObject {
-    @Published var templateURL: URL?
-    // CORRECTED: This is now an array of [TemplateElement]
-    @Published var templateElements: [TemplateElement] = []
-    @Published var answers: [String: Any] = [:]
+final class ContentViewModel: ObservableObject {
 
-    @Published var isLoading = false
-    @Published var errorMessage: String?
+    /// Strongly typed template drives the view layer.
+    @Published var elements: [TemplateElement] = []
 
-    private func parseTemplate() {
-        guard let url = templateURL else { return }
-        
-        isLoading = true
-        
-        // CORRECTED: This mock data now correctly creates [TemplateElement]
-        self.templateElements = [
-            .textField(id: UUID(), name: "client_name", label: "Client Name", hint: "e.g., John Smith"),
-            .textField(id: UUID(), name: "matter_number", label: "Matter Number", hint: "e.g., 12345"),
-            .conditional(id: UUID(), name: "is_urgent", label: "Is this matter urgent?", elements: [
-                .staticText(id: UUID(), content: "Note: Urgent matters will be prioritized."),
-                .textField(id: UUID(), name: "urgency_reason", label: "Reason for Urgency", hint: "e.g., Court deadline")
-            ]),
-            .repeatingGroup(id: UUID(), name: "directors", label: "Directors", templateElements: [
-                .textField(id: UUID(), name: "director_name", label: "Director Name", hint: "")
-            ])
+    /// Very simple answer store to keep this example compiling.
+    /// Replace with your real answer model/bindings as needed.
+    @Published var answers: [String: String] = [:]
+
+    init() {
+        // Temporary seed so the app shows something at runtime.
+        // Replace with your real loading/parsing logic.
+        self.elements = [
+            TemplateElement(key: "client_name", prompt: "Client Name", kind: .text),
+            TemplateElement(key: "matter_value", prompt: "Matter Value", kind: .number),
+            TemplateElement(key: "review_date", prompt: "Review Date", kind: .date),
+            TemplateElement(key: "urgent", prompt: "Urgent?", kind: .toggle),
+            TemplateElement(key: "category", prompt: "Category", kind: .picker, options: ["Conveyancing", "Wills", "Litigation"]),
+            TemplateElement(
+                key: "declarations",
+                prompt: "Declarations",
+                kind: .group,
+                children: [
+                    TemplateElement(key: "decl1", prompt: "Declaration 1", kind: .text),
+                    TemplateElement(key: "decl2", prompt: "Declaration 2", kind: .text)
+                ]
+            )
         ]
-        
-        self.answers["is_urgent"] = false
-        
-        isLoading = false
     }
 
-    // MARK: - User Actions
-
-    func selectTemplate() {
-        let openPanel = NSOpenPanel()
-        // CORRECTED: This uses the correct UTType for .docx files
-        openPanel.allowedContentTypes = [UTType.openXMLWordProcessingMLDocument]
-        openPanel.allowsMultipleSelection = false
-        openPanel.canChooseDirectories = false
-        
-        if openPanel.runModal() == .OK {
-            self.templateURL = openPanel.url
-            parseTemplate()
-        }
-    }
-    
-    func generateDocument() {
-        guard templateURL != nil else {
-            errorMessage = "Please select a template first."
-            return
-        }
-        
-        let savePanel = NSSavePanel()
-        // CORRECTED: This also uses the correct UTType
-        savePanel.allowedContentTypes = [UTType.openXMLWordProcessingMLDocument]
-        savePanel.nameFieldStringValue = "Generated Document.docx"
-        
-        if savePanel.runModal() == .OK, let outputURL = savePanel.url {
-            print("Generating document at: \(outputURL.path)")
-            print("With answers: \(answers)")
-        }
+    // MARK: - Loading/parsing template
+    // Implement your real template loader here and assign to `elements`.
+    func loadTemplate(from url: URL) throws {
+        // Parse file into [TemplateElement] and assign to `elements`.
+        // Ensure you produce stable keys so answers line up with elements.
     }
 }
