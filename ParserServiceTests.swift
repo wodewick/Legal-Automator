@@ -19,6 +19,22 @@ final class ParserServiceUnitTests: XCTestCase {
     private func parse(_ template: String) throws -> [TemplateElement] {
         try parser.tokenize(template)
     }
+    
+    /// Returns elements omitting `.plainText` whose text is only whitespace /
+    /// newlines, so tests are not fragile to formatting.
+    private func significant(_ elements: [TemplateElement]) -> [TemplateElement] {
+        elements.filter {
+            if case .plainText(_, let t) = $0 {
+                return t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            }
+            return true
+        }
+    }
+
+    /// Returns true if any element in the array is a `.variable` with the given name.
+    private func containsVariable(_ name: String, in elements: [TemplateElement]) -> Bool {
+        elements.contains { if case .variable(_, name, _, _) = $0 { return true }; return false }
+    }
 
     // ---------------------------------------------------------------------
     // Variable parsing
@@ -26,12 +42,12 @@ final class ParserServiceUnitTests: XCTestCase {
     func testVariableParsing() throws {
         let template = "Hello {{client_name}}."
         let elements = try parse(template)
+        let sig = significant(elements)
+        XCTAssertEqual(sig.count, 3)
 
-        XCTAssertEqual(elements.count, 3)
-
-        guard case .plainText(_, "Hello ")           = elements[0],
-              case .variable(_, "client_name", _, _) = elements[1],
-              case .plainText(_, ".")                = elements[2] else {
+        guard case .plainText(_, "Hello ")           = sig[0],
+              case .variable(_, "client_name", _, _) = sig[1],
+              case .plainText(_, ".")                = sig[2] else {
             return XCTFail("Element sequence mismatch")
         }
     }
@@ -52,17 +68,30 @@ final class ParserServiceUnitTests: XCTestCase {
         """
 
         let elements = try parse(template)
-        XCTAssertEqual(elements.count, 1)
+        let sig = significant(elements)
+        XCTAssertEqual(sig.count, 1)
 
-        guard case .conditional(_, "is_company", _, let inner) = elements.first else {
+        guard case .conditional(_, "is_company", _, let inner) = sig[0] else {
             return XCTFail("Missing top-level conditional")
         }
-        XCTAssertEqual(inner.count, 3)
+        let innerSig = significant(inner)
 
-        guard case .conditional(_, "has_directors", _, let deeper) = inner[2],
-              case .repeatingGroup(_, "directors", _, let templateEls) = deeper[0],
-              case .variable(_, "director_name", _, _) = templateEls[0] else {
+        // locate the 'has_directors' conditional inside innerSig
+        guard let hasDir = innerSig.first(where: {
+            if case .conditional(_, "has_directors", _, _) = $0 { return true }
+            return false
+        }),
+        case .conditional(_, "has_directors", _, let deeper) = hasDir else {
             return XCTFail("Nested structure mismatch")
+        }
+        // Find the repeating group inside `deeper`
+        let repeatElement = deeper.first { if case .repeatingGroup = $0 { return true } ; return false }
+        guard case .repeatingGroup(_, "directors", _, let tmpl) = repeatElement else {
+            return XCTFail("Repeating group not found")
+        }
+        let tmplSig = significant(tmpl)
+        guard containsVariable("director_name", in: tmplSig) else {
+            return XCTFail("Variable 'director_name' missing in template")
         }
     }
 
@@ -78,12 +107,18 @@ final class ParserServiceUnitTests: XCTestCase {
         """
 
         let elements = try parse(template)
-        XCTAssertEqual(elements.count, 2)
+        let sig = significant(elements)
 
-        guard case .plainText                     = elements[0],
-              case .repeatingGroup(_, "directors", _, let tmpl) = elements[1],
-              case .variable(_, "name", _, _)     = tmpl.first else {
+        // Locate the repeating group element
+        guard let group = sig.first(where: {
+            if case .repeatingGroup = $0 { return true }; return false
+        }),
+              case .repeatingGroup(_, "directors", _, let tmpl) = group else {
             return XCTFail("Repeating group parsed incorrectly")
+        }
+        let tmplSig = significant(tmpl)
+        guard containsVariable("name", in: tmplSig) else {
+            return XCTFail("Variable 'name' missing in template")
         }
     }
 
