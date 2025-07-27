@@ -92,7 +92,7 @@ final class ParserService {
     // ----------------------------------------------------------------------
 
     /// Builds a nested [TemplateElement] tree from raw document text.
-    private func tokenize(_ text: String) throws -> [TemplateElement] {
+    internal func tokenize(_ text: String) throws -> [TemplateElement] {
 
         // Regex patterns ----------------------------------------------------
         let variableRX  = try NSRegularExpression(pattern: #"\{\{([^}]+)\}\}"#)

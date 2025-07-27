@@ -108,7 +108,10 @@ struct GeneratorService {
     }
 
     // MARK: - Replacement pipeline -----------------------------------------
-
+    //
+    // The pipeline order is Variable ➜ Conditional ➜ Repeat.  Each stage may
+    // call `applyReplacements` recursively to ensure nested constructs are
+    // resolved with the appropriate answer scope.
     private func applyReplacements(_ xml: String,
                                    answers: [String: Any]) -> String {
         var out = xml
@@ -119,46 +122,85 @@ struct GeneratorService {
     }
 
     /// Replaces {{variable}} placeholders with answer values.
+    /// Values are converted to strings via `String(describing:)` and XML‑escaped.
     private func replaceVariables(in xml: String,
                                   answers: [String: Any]) -> String {
-        let rx = try! NSRegularExpression(pattern: #"\{\{([^}]+)\}\}"#)
-        var result = xml
-        let matches = rx.matches(in: xml, range: NSRange(xml.startIndex..., in: xml))
-            .reversed()  // Replace back‑to‑front to keep ranges stable
 
-        for m in matches {
-            let name = (xml as NSString).substring(with: m.range(at: 1))
-                .trimmingCharacters(in: .whitespaces)
-            let value = answers[name].map { String(describing: $0) } ?? ""
-            let escaped = escapeXML(value)
+        let rx = try! NSRegularExpression(pattern: #"\{\{\s*([^}\s]+)\s*\}\}"#)
+        var result = xml
+
+        // Iterate from the end of the document forward so that earlier index
+        // ranges remain valid after replacements.
+        for match in rx.matches(in: xml, range: NSRange(xml.startIndex..., in: xml)).reversed() {
+
+            let name = (xml as NSString).substring(with: match.range(at: 1))
+            let raw  = answers[name].map { String(describing: $0) } ?? ""
+            let escaped = escapeXML(raw)
+
             result.replaceSubrange(
-                Range(m.range, in: result)!,
+                Range(match.range, in: result)!,
                 with: escaped
             )
         }
         return result
     }
 
-    /// Handles [[IF var]] … [[END IF]] blocks.
+    /// Evaluates [[IF xyz]] … [[END IF]] blocks.
+    /// The block is included **only** when `answers[xyz]` is truthy (`Bool == true`)
+    /// or a non‑empty string / non‑zero number.
     private func processConditionals(in xml: String,
                                      answers: [String: Any]) -> String {
-        // Placeholder MVP: remove tags but do not drop blocks.
-        // TODO: implement full true/false pruning.
-        let ifOpen = try! NSRegularExpression(pattern: #"\[\[IF[^\]]+\]\]"#)
-        let ifClose = try! NSRegularExpression(pattern: #"\[\[END\s+IF\]\]"#)
-        var out = ifOpen.stringByReplacingMatches(in: xml, range: NSRange(xml.startIndex..., in: xml), withTemplate: "")
-        out = ifClose.stringByReplacingMatches(in: out, range: NSRange(out.startIndex..., in: out), withTemplate: "")
+
+        let pattern = #"(?s)\[\[IF\s+([^\]]+)\]\](.*?)\[\[END\s+IF\]\]"#
+        let rx = try! NSRegularExpression(pattern: pattern, options: [])
+
+        var out = xml
+        for match in rx.matches(in: xml, range: NSRange(xml.startIndex..., in: xml)).reversed() {
+
+            let varName = (xml as NSString).substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
+            let body    = (xml as NSString).substring(with: match.range(at: 2))
+
+            let value   = answers[varName]
+            let isTrue: Bool = {
+                switch value {
+                case nil:                 return false
+                case let b as Bool:       return b
+                case let s as String:     return s.isEmpty == false
+                case let n as NSNumber:   return n != 0
+                default:                  return true   // non‑nil, non‑empty
+                }
+            }()
+
+            let replacement = isTrue
+                ? applyReplacements(body, answers: answers) // recurse so inner tags resolved
+                : ""
+
+            out.replaceSubrange(Range(match.range, in: out)!, with: replacement)
+        }
         return out
     }
 
-    /// Handles [[REPEAT FOR group]] … [[END REPEAT]] blocks.
+    /// Expands [[REPEAT FOR group]] … [[END REPEAT]] blocks.
+    /// Expects `answers[group]` to be `[[String: Any]]`.
     private func processRepeats(in xml: String,
                                 answers: [String: Any]) -> String {
-        // Placeholder MVP: strip repeat tags but keep single body.
-        let repOpen = try! NSRegularExpression(pattern: #"\[\[REPEAT[^\]]+\]\]"#)
-        let repClose = try! NSRegularExpression(pattern: #"\[\[END\s+REPEAT\]\]"#)
-        var out = repOpen.stringByReplacingMatches(in: xml, range: NSRange(xml.startIndex..., in: xml), withTemplate: "")
-        out = repClose.stringByReplacingMatches(in: out, range: NSRange(out.startIndex..., in: out), withTemplate: "")
+
+        let pattern = #"(?s)\[\[REPEAT\s+FOR\s+([^\]]+)\]\](.*?)\[\[END\s+REPEAT\]\]"#
+        let rx = try! NSRegularExpression(pattern: pattern, options: [])
+
+        var out = xml
+        for match in rx.matches(in: xml, range: NSRange(xml.startIndex..., in: xml)).reversed() {
+
+            let groupName = (xml as NSString).substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
+            let body      = (xml as NSString).substring(with: match.range(at: 2))
+            let rows      = answers[groupName] as? [[String: Any]] ?? []
+
+            let rendered = rows.map { rowDict in
+                applyReplacements(body, answers: rowDict)   // recursive processing
+            }.joined()
+
+            out.replaceSubrange(Range(match.range, in: out)!, with: rendered)
+        }
         return out
     }
 

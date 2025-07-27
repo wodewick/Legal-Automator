@@ -54,14 +54,43 @@ final class ContentViewModel: ObservableObject {
     }
 
     /// Merge `answers` into `templateURL` to produce an output document.
-    /// (Implementation arrives with Milestone 2.)
     func generateDocument() {
-        guard templateURL != nil else {
+        // Must have a template selected
+        guard let tplURL = templateURL else {
             errorMessage = "Please select a template before generating a document."
             return
         }
-        // TODO: integrate GeneratorService
-        errorMessage = nil
+
+        // Ask where to save the generated file
+        let panel = NSSavePanel()
+        panel.allowedFileTypes = ["docx"]
+        panel.nameFieldStringValue = "Merged-Document.docx"
+
+        guard panel.runModal() == .OK, let saveURL = panel.url else {
+            return  // user cancelled
+        }
+
+        // Snapshot answers to avoid thread‑safety issues
+        let answersSnapshot = answers
+        errorMessage = "Generating…"
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let finalURL = try GeneratorService()
+                    .generate(templateURL: tplURL,
+                              answers: answersSnapshot,
+                              destinationURL: saveURL)
+
+                DispatchQueue.main.async {
+                    self.errorMessage = nil
+                    NSWorkspace.shared.open(finalURL)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
     }
 
     // MARK: Internal helpers -----------------------------------------------
