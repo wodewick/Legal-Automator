@@ -8,6 +8,7 @@
 import Foundation
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 final class ContentViewModel: ObservableObject {
     // MARK: - Template state
@@ -40,7 +41,11 @@ final class ContentViewModel: ObservableObject {
     // MARK: - Actions
     func selectTemplate() {
         let panel = NSOpenPanel()
-        panel.allowedFileTypes = ["docx"]
+        if #available(macOS 12.0, *) {
+            panel.allowedContentTypes = [UTType(filenameExtension: "docx") ?? .data]
+        } else {
+            panel.allowedFileTypes = ["docx"]
+        }
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.title = "Select a .docx template"
@@ -63,6 +68,19 @@ final class ContentViewModel: ObservableObject {
         // In a real implementation, perform the merge and write out a file.
         // For now, just indicate success.
         errorMessage = nil
+    }
+
+    // Open a template directly from a dropped file URL (or programmatic open)
+    func openTemplate(at url: URL) {
+        let needsStop = url.startAccessingSecurityScopedResource()
+        defer { if needsStop { url.stopAccessingSecurityScopedResource() } }
+
+        self.templateURL = url
+        do {
+            try loadTemplate(from: url)
+        } catch {
+            self.errorMessage = "Failed to load template: \(error.localizedDescription)"
+        }
     }
 
     // MARK: - Parsing (stub)

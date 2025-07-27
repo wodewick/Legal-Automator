@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var viewModel = ContentViewModel()
@@ -19,15 +20,12 @@ struct ContentView: View {
 
             // Main content area
             if _viewModel.wrappedValue.templateURL == nil {
-                // Show a welcome/selection view if no template is loaded
-                VStack(spacing: 20) {
-                    Spacer()
-                    Text("Document Automator")
-                        .font(.largeTitle)
-                    Text("Select a .docx template to begin.")
-                        .foregroundStyle(.secondary)
+                DropTargetView(
+                    promptTitle: "Document Automator",
+                    promptSubtitle: "Drop a .docx here or click Select Template…",
+                    onDropURL: { url in _viewModel.wrappedValue.openTemplate(at: url) }
+                ) {
                     Button("Select Template...") { _viewModel.wrappedValue.selectTemplate() }
-                    Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -59,5 +57,64 @@ struct ContentView: View {
         }
         .padding()
         .frame(height: 55)
+    }
+}
+
+// MARK: - DropTargetView
+private struct DropTargetView<Footer: View>: View {
+    let promptTitle: String
+    let promptSubtitle: String
+    let onDropURL: (URL) -> Void
+    @ViewBuilder var footer: () -> Footer
+
+    @State private var isTargeted = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Spacer(minLength: 0)
+            Text(promptTitle)
+                .font(.largeTitle)
+            Text(promptSubtitle)
+                .foregroundStyle(.secondary)
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(style: StrokeStyle(lineWidth: 2, dash: [8]))
+                    .foregroundStyle(isTargeted ? Color.accentColor : Color.secondary)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(isTargeted ? Color.accentColor.opacity(0.1) : Color.clear)
+                    )
+                VStack(spacing: 8) {
+                    Image(systemName: "doc.badge.plus")
+                        .font(.system(size: 36))
+                    Text("Drop .docx file here")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(24)
+            }
+            .frame(maxWidth: 460, minHeight: 160)
+            .onDrop(of: [UTType.fileURL], isTargeted: $isTargeted) { providers in
+                // Attempt to load the first file URL provider
+                guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }) else {
+                    return false
+                }
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+                    guard error == nil else { return }
+                    let url: URL? = (item as? URL) ?? (item as? NSURL)?.absoluteURL
+                    if let url, url.pathExtension.lowercased() == "docx" {
+                        DispatchQueue.main.async {
+                            onDropURL(url)
+                        }
+                    }
+                }
+                return true
+            }
+
+            footer()
+            Spacer(minLength: 0)
+        }
+        .padding()
     }
 }
