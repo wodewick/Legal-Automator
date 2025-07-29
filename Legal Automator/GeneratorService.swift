@@ -78,7 +78,7 @@ struct GeneratorService {
         let finalData = Data(xml.utf8)
         try archive.addEntry(with: "word/document.xml",
                              type: .file,
-                             uncompressedSize: Int64(finalData.count),
+                             uncompressedSize: UInt32(finalData.count),
                              compressionMethod: .deflate,
                              provider: { position, size in
                                  finalData.subdata(in: Int(position)..<Int(position + size))
