@@ -30,7 +30,9 @@ struct QuestionnaireView: View {
         case .variable(_, let name, let labelOpt, let hintOpt):
             TextField(labelOpt ?? name.capitalized,
                       text: textBinding(for: name),
-                      prompt: Text(hintOpt ?? ""))
+                      prompt: Text(hintOpt ?? "Enter \(labelOpt ?? name)"))
+                .textFieldStyle(.roundedBorder)
+                .padding(.vertical, 2)
 
         // MARK: - Conditional section
 

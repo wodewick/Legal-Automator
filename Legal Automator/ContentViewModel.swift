@@ -54,25 +54,26 @@ final class ContentViewModel: ObservableObject {
     }
 
     /// Merge `answers` into `templateURL` to produce an output document.
+    @MainActor
     func generateDocument() {
-        // Must have a template selected
         guard let tplURL = templateURL else {
             errorMessage = "Please select a template before generating a document."
             return
         }
 
-        // Ask where to save the generated file
         let panel = NSSavePanel()
-        panel.allowedFileTypes = ["docx"]
+        if #available(macOS 12.0, *) {
+            panel.allowedContentTypes = [UTType(filenameExtension: "docx") ?? .data]
+        } else {
+            panel.allowedFileTypes = ["docx"]
+        }
         panel.nameFieldStringValue = "Merged-Document.docx"
 
-        guard panel.runModal() == .OK, let saveURL = panel.url else {
-            return  // user cancelled
-        }
+        guard panel.runModal() == .OK, let saveURL = panel.url else { return }
 
-        // Snapshot answers to avoid thread‑safety issues
-        let answersSnapshot = answers
-        errorMessage = "Generating…"
+        // Snapshot answers to avoid races
+        let answersSnapshot = self.answers
+        self.errorMessage = "Generating…"
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {
