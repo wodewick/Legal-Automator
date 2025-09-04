@@ -1,186 +1,315 @@
 //
-//  ContentView.swift
+//  ContentViewModel.swift
 //  Legal Automator
 //
 //  Created by Rodney Serkowski on 27/7/2025.
-//  Updated: 04/09/2025 – remove _viewModel.wrappedValue usage, wire isGenerating,
-//  add keyboard shortcuts, and polish drop target visuals.
-//  Updated: 04/09/2025 (2) – add status bar, disable form while generating, a11y hints
-//  Updated: 04/09/2025 (3) – switch to @EnvironmentObject for App-level Commands
+//  Updated: 04/09/2025 – separate busy state from error text, use allowedContentTypes
+//  on NSSavePanel with fallback, and enforce .docx extension on saves.
+//  Updated: 04/09/2025 (2) – add persistent Recent Templates using security-scoped bookmarks
+//  Updated: 04/09/2025 (3) – add Reveal in Finder, Pin/Unpin, and iCloud KVS sync
 //
 
+import Foundation
 import SwiftUI
+import AppKit
 import UniformTypeIdentifiers
 
-struct ContentView: View {
-    @EnvironmentObject private var viewModel: ContentViewModel
+/// Model for a recently-used template bookmark.
+struct RecentTemplate: Codable, Equatable {
+    let name: String          // Display name (lastPathComponent)
+    let bookmark: Data        // Security-scoped bookmark to the .docx
+    let lastUsed: Date
+    var pinned: Bool
 
-    var body: some View {
-        VStack(spacing: 0) {
-            // Header area
-            headerView
-
-            // Lightweight status bar
-            statusBarView
-
-            Divider()
-
-            // Main content area
-            if viewModel.templateURL == nil {
-                DropTargetView(
-                    promptTitle: "Document Automator",
-                    promptSubtitle: "Drop a .docx here or click Select Template…",
-                    onDropURL: { url in viewModel.openTemplate(at: url) }
-                ) {
-                    Button("Select Template…") {
-                        viewModel.selectTemplate()
-                    }
-                    .keyboardShortcut("o", modifiers: [.command])
-                    .help("Open a .docx template (⌘O)")
-                    .accessibilityLabel("Select Template")
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityElement(children: .contain)
-            } else {
-                // Show the questionnaire form once a template is loaded
-                QuestionnaireView(
-                    elements: viewModel.templateElements,
-                    answers: $viewModel.answers
-                )
-                // Prevent edits during generation to avoid race conditions
-                .disabled(viewModel.isGenerating)
-            }
-        }
-        // Error alert (real errors only; progress uses isGenerating)
-        .alert("Error", isPresented: Binding(
-            get: { viewModel.errorMessage != nil },
-            set: { newValue in if newValue == false { viewModel.errorMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) { viewModel.errorMessage = nil }
-        } message: {
-            Text(viewModel.errorMessage ?? "An unknown error occurred.")
-        }
+    init(name: String, bookmark: Data, lastUsed: Date, pinned: Bool = false) {
+        self.name = name
+        self.bookmark = bookmark
+        self.lastUsed = lastUsed
+        self.pinned = pinned
     }
 
-    private var headerView: some View {
-        HStack(spacing: 12) {
-            Text(viewModel.templateURL?.lastPathComponent ?? "No Template Selected")
-                .font(.headline)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .accessibilityLabel(
-                    viewModel.templateURL == nil
-                    ? "No template selected"
-                    : "Selected template \(viewModel.templateURL!.lastPathComponent)"
-                )
+    private enum CodingKeys: String, CodingKey { case name, bookmark, lastUsed, pinned }
 
-            Spacer()
-
-            if viewModel.isGenerating {
-                ProgressView()
-                    .controlSize(.small)
-                    .help("Generating the merged document…")
-                    .accessibilityLabel("Generating document")
-            }
-
-            Button("Generate Document") {
-                viewModel.generateDocument()
-            }
-            .disabled(viewModel.templateURL == nil || viewModel.isGenerating)
-            .keyboardShortcut("e", modifiers: [.command])
-            .help("Generate a merged Word document (⌘E)")
-            .accessibilityLabel("Generate Document")
-        }
-        .padding()
-        .frame(height: 55)
-    }
-
-    private var statusBarView: some View {
-        HStack(spacing: 8) {
-            if let url = viewModel.templateURL {
-                Label {
-                    Text(url.path)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                } icon: {
-                    Image(systemName: "doc")
-                        .accessibilityHidden(true)
-                }
-                .accessibilityLabel("Template path \(url.path)")
-            } else {
-                Text("Ready")
-                    .accessibilityLabel("Ready")
-            }
-            Spacer()
-        }
-        .font(.footnote)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.bottom, 6)
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        bookmark = try c.decode(Data.self, forKey: .bookmark)
+        lastUsed = try c.decode(Date.self, forKey: .lastUsed)
+        pinned = (try? c.decode(Bool.self, forKey: .pinned)) ?? false
     }
 }
 
-// MARK: - DropTargetView
-private struct DropTargetView<Footer: View>: View {
-    let promptTitle: String
-    let promptSubtitle: String
-    let onDropURL: (URL) -> Void
-    @ViewBuilder var footer: () -> Footer
+/// Top‑level view‑model orchestrating template selection, parsing, and (later)
+/// document generation.
+final class ContentViewModel: ObservableObject {
 
-    @State private var isTargeted = false
+    // MARK: Dependencies
+    private let parser = ParserService()
 
-    var body: some View {
-        VStack(spacing: 16) {
-            Spacer(minLength: 0)
+    // MARK: Template state
+    @Published var templateURL: URL?
+    @Published private(set) var elements: [TemplateElement] = [
+        .plainText(content: "Select a template to begin.")
+    ]
+    /// Answers keyed by variable / group name.  GeneratorService will consume this later.
+    @Published var answers: [String: Any] = [:]
 
-            Text(promptTitle)
-                .font(.largeTitle)
+    // MARK: UI feedback
+    /// Present only real errors to the operator. Do not overload with status text.
+    @Published var errorMessage: String?
+    /// Busy flag for long‑running work (e.g., generation). Views can show a spinner.
+    @Published var isGenerating: Bool = false
 
-            Text(promptSubtitle)
-                .foregroundStyle(.secondary)
+    // MARK: Recents
+    @Published private(set) var recentTemplates: [RecentTemplate] = []
+    private let recentsKey = "RecentTemplateBookmarksV1"
+    private let recentsLimit = 5
+    private let kvs = NSUbiquitousKeyValueStore.default
 
-            ZStack {
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(style: StrokeStyle(lineWidth: 2, dash: [8]))
-                    .foregroundStyle(isTargeted ? Color.accentColor : Color.secondary)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(isTargeted ? Color.accentColor.opacity(0.1) : Color.clear)
-                    )
+    init() {
+        loadRecents()
+        // Load from iCloud if local is empty (best-effort)
+        syncFromKVSIfLocalEmpty()
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(kvStoreChanged(_:)),
+                                               name: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+                                               object: kvs)
+        kvs.synchronize()
+    }
 
-                VStack(spacing: 8) {
-                    Image(systemName: "doc.badge.plus")
-                        .font(.system(size: 36))
-                        .accessibilityHidden(true)
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
 
-                    Text("Drop .docx file here")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(24)
-            }
-            .frame(maxWidth: 460, minHeight: 160)
-            .onDrop(of: [UTType.fileURL], isTargeted: $isTargeted) { providers in
-                // Attempt to load the first file URL provider
-                guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }) else {
-                    return false
-                }
-                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
-                    guard error == nil else { return }
-                    let url: URL? = (item as? URL) ?? (item as? NSURL)?.absoluteURL
-                    if let url, url.pathExtension.lowercased() == "docx" {
-                        DispatchQueue.main.async {
-                            onDropURL(url)
-                        }
-                    }
-                }
-                return true
-            }
+    /// Back‑compat shim: some older views still reference `templateElements`.
+    var templateElements: [TemplateElement] { elements }
 
-            footer()
+    // MARK: User actions ----------------------------------------------------
 
-            Spacer(minLength: 0)
+    /// Show an Open dialog so the operator can choose a *.docx* template.
+    func selectTemplate() {
+        let panel = NSOpenPanel()
+        if #available(macOS 12.0, *) {
+            panel.allowedContentTypes = [UTType(filenameExtension: "docx") ?? .data]
+        } else {
+            panel.allowedFileTypes = ["docx"]
         }
-        .padding()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.title = "Select a .docx template"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            openTemplate(at: url)
+        }
+    }
+
+    /// Merge `answers` into `templateURL` to produce an output document.
+    @MainActor
+    func generateDocument() {
+        guard let tplURL = templateURL else {
+            errorMessage = "Please select a template before generating a document."
+            return
+        }
+
+        let panel = NSSavePanel()
+        if #available(macOS 12.0, *) {
+            panel.allowedContentTypes = [UTType(filenameExtension: "docx") ?? .data]
+        } else {
+            panel.allowedFileTypes = ["docx"]
+        }
+        panel.nameFieldStringValue = "Merged-Document.docx"
+
+        guard panel.runModal() == .OK, let chosenURL = panel.url else { return }
+
+        // Ensure the destination ends with .docx (handles no extension or a wrong one).
+        let saveURL: URL = {
+            let ext = chosenURL.pathExtension.lowercased()
+            if ext.isEmpty {
+                return chosenURL.appendingPathExtension("docx")
+            } else if ext != "docx" {
+                return chosenURL.deletingPathExtension().appendingPathExtension("docx")
+            } else {
+                return chosenURL
+            }
+        }()
+
+        // Snapshot answers to avoid races
+        let answersSnapshot = self.answers
+
+        // Update UI state
+        self.errorMessage = nil
+        self.isGenerating = true
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let finalURL = try GeneratorService()
+                    .generate(templateURL: tplURL,
+                              answers: answersSnapshot,
+                              destinationURL: saveURL)
+
+                DispatchQueue.main.async {
+                    self.isGenerating = false
+                    self.errorMessage = nil
+                    NSWorkspace.shared.open(finalURL)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isGenerating = false
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    // MARK: Internal helpers -----------------------------------------------
+
+    /// Called by Open‑panel, drag‑and‑drop, or recent‑menu.
+    func openTemplate(at url: URL) {
+        let needsStop = url.startAccessingSecurityScopedResource()
+        defer { if needsStop { url.stopAccessingSecurityScopedResource() } }
+
+        templateURL = url
+        do {
+            elements = try parser.parse(templateURL: url)
+            errorMessage = nil
+            rememberRecent(url: url)
+        } catch {
+            elements = [.plainText(content: "Failed to load template.")]
+            errorMessage = "Failed to load template: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: Recent Templates ------------------------------------------------
+
+    /// Store (or refresh) a recent template entry, keeping a max of `recentsLimit`.
+    func rememberRecent(url: URL) {
+        do {
+            let bookmark = try url.bookmarkData(options: [.withSecurityScope],
+                                                includingResourceValuesForKeys: nil,
+                                                relativeTo: nil)
+            var list = recentTemplates
+            let name = url.lastPathComponent
+
+            // Preserve pinned state if we already know this template by name
+            let wasPinned = list.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.pinned ?? false
+
+            // Deduplicate by name and (best-effort) bookmark bytes.
+            list.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+            if let idx = list.firstIndex(where: { $0.bookmark == bookmark }) {
+                list.remove(at: idx)
+            }
+
+            // Insert newest at front
+            list.insert(RecentTemplate(name: name,
+                                       bookmark: bookmark,
+                                       lastUsed: Date(),
+                                       pinned: wasPinned), at: 0)
+
+            recentTemplates = list
+            persistRecents()
+        } catch {
+            // Non-fatal; just surface a soft error.
+            self.errorMessage = "Could not save recent template: \(error.localizedDescription)"
+        }
+    }
+
+    /// Open a recent template from its bookmark.
+    func openRecent(_ item: RecentTemplate) {
+        do {
+            var isStale = false
+            let url = try URL(resolvingBookmarkData: item.bookmark,
+                              options: [.withSecurityScope],
+                              relativeTo: nil,
+                              bookmarkDataIsStale: &isStale)
+            openTemplate(at: url)
+            // Refresh bookmark if stale (and re-remember to bump lastUsed)
+            rememberRecent(url: url)
+        } catch {
+            self.errorMessage = "Unable to open recent template: \(error.localizedDescription)"
+        }
+    }
+
+    /// Reveal a recent item in Finder.
+    func revealRecent(_ item: RecentTemplate) {
+        do {
+            var isStale = false
+            let url = try URL(resolvingBookmarkData: item.bookmark,
+                              options: [.withSecurityScope],
+                              relativeTo: nil,
+                              bookmarkDataIsStale: &isStale)
+            let needsStop = url.startAccessingSecurityScopedResource()
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            if needsStop { url.stopAccessingSecurityScopedResource() }
+            // If stale, refresh bookmark
+            if isStale { rememberRecent(url: url) }
+        } catch {
+            self.errorMessage = "Unable to reveal in Finder: \(error.localizedDescription)"
+        }
+    }
+
+    /// Toggle pin/unpin for a recent entry.
+    func togglePinRecent(_ item: RecentTemplate) {
+        if let idx = recentTemplates.firstIndex(where: { $0.name.caseInsensitiveCompare(item.name) == .orderedSame }) {
+            recentTemplates[idx].pinned.toggle()
+            persistRecents()
+        }
+    }
+
+    /// Remove all stored recent templates.
+    func clearRecentTemplates() {
+        recentTemplates.removeAll()
+        UserDefaults.standard.removeObject(forKey: recentsKey)
+        kvs.removeObject(forKey: recentsKey)
+        kvs.synchronize()
+    }
+
+    private func persistRecents() {
+        // Sort pinned first, then by lastUsed desc; trim to recentsLimit.
+        recentTemplates.sort { lhs, rhs in
+            if lhs.pinned != rhs.pinned { return lhs.pinned && !rhs.pinned }
+            return lhs.lastUsed > rhs.lastUsed
+        }
+        if recentTemplates.count > recentsLimit {
+            recentTemplates = Array(recentTemplates.prefix(recentsLimit))
+        }
+        do {
+            let data = try JSONEncoder().encode(recentTemplates)
+            UserDefaults.standard.set(data, forKey: recentsKey)
+            kvs.set(data, forKey: recentsKey)
+            kvs.synchronize()
+        } catch {
+            // Non-fatal; do not block UI.
+        }
+    }
+
+    private func loadRecents() {
+        guard let data = UserDefaults.standard.data(forKey: recentsKey) else { return }
+        if let decoded = try? JSONDecoder().decode([RecentTemplate].self, from: data) {
+            recentTemplates = Array(decoded.sorted(by: { (l, r) -> Bool in
+                if l.pinned != r.pinned { return l.pinned && !r.pinned }
+                return l.lastUsed > r.lastUsed
+            }).prefix(recentsLimit))
+        } else {
+            // If decoding fails, clear the corrupted data.
+            UserDefaults.standard.removeObject(forKey: recentsKey)
+        }
+    }
+
+    private func syncFromKVSIfLocalEmpty() {
+        guard recentTemplates.isEmpty, let data = kvs.data(forKey: recentsKey) else { return }
+        if let decoded = try? JSONDecoder().decode([RecentTemplate].self, from: data) {
+            recentTemplates = Array(decoded.sorted(by: { (l, r) -> Bool in
+                if l.pinned != r.pinned { return l.pinned && !r.pinned }
+                return l.lastUsed > r.lastUsed
+            }).prefix(recentsLimit))
+        }
+    }
+
+    @objc private func kvStoreChanged(_ note: Notification) {
+        guard let reason = note.userInfo?[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int,
+              reason == NSUbiquitousKeyValueStoreServerChange ||
+              reason == NSUbiquitousKeyValueStoreInitialSyncChange else { return }
+        // Only adopt iCloud data if we currently have none (avoid clobbering local)
+        syncFromKVSIfLocalEmpty()
     }
 }
