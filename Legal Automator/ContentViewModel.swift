@@ -5,13 +5,40 @@
 //  Created by Rodney Serkowski on 27/7/2025.
 //  Updated: 04/09/2025 – separate busy state from error text, use allowedContentTypes
 //  on NSSavePanel with fallback, and enforce .docx extension on saves.
+//  Updated: 04/09/2025 (2) – add persistent Recent Templates (bookmarks), pin/unpin,
+//  Reveal in Finder, and iCloud KVS sync.
 //
-
 import Foundation
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+// MARK: - Recent Templates Model
+struct RecentTemplate: Codable, Equatable {
+    let name: String            // Display name (lastPathComponent)
+    let bookmark: Data          // Security-scoped bookmark to the .docx
+    let lastUsed: Date
+    var pinned: Bool
+
+    init(name: String, bookmark: Data, lastUsed: Date, pinned: Bool = false) {
+        self.name = name
+        self.bookmark = bookmark
+        self.lastUsed = lastUsed
+        self.pinned = pinned
+    }
+
+    private enum CodingKeys: String, CodingKey { case name, bookmark, lastUsed, pinned }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        bookmark = try c.decode(Data.self, forKey: .bookmark)
+        lastUsed = try c.decode(Date.self, forKey: .lastUsed)
+        pinned = (try? c.decode(Bool.self, forKey: .pinned)) ?? false
+    }
+}
+
+// MARK: - ViewModel
 /// Top-level view-model orchestrating template selection, parsing, and (later)
 /// document generation.
 final class ContentViewModel: ObservableObject {
@@ -24,8 +51,7 @@ final class ContentViewModel: ObservableObject {
     @Published private(set) var elements: [TemplateElement] = [
         .plainText(content: "Select a template to begin.")
     ]
-    /// Answers keyed by variable / group name.  GeneratorService will consume
-    /// this in Milestone 2.
+    /// Answers keyed by variable / group name.  GeneratorService will consume this later.
     @Published var answers: [String: Any] = [:]
 
     // MARK: UI feedback
@@ -33,6 +59,27 @@ final class ContentViewModel: ObservableObject {
     @Published var errorMessage: String?
     /// Busy flag for long-running work (e.g., generation). Views can show a spinner.
     @Published var isGenerating: Bool = false
+
+    // MARK: Recent Templates
+    @Published private(set) var recentTemplates: [RecentTemplate] = []
+    private let recentsKey = "RecentTemplateBookmarksV1"
+    private let recentsLimit = 5
+    private let kvs = NSUbiquitousKeyValueStore.default
+
+    init() {
+        loadRecents()
+        // Best-effort: adopt iCloud if we have nothing local
+        syncFromKVSIfLocalEmpty()
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(kvStoreChanged(_:)),
+                                               name: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+                                               object: kvs)
+        kvs.synchronize()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
 
     /// Back-compat shim: some older views still reference `templateElements`.
     var templateElements: [TemplateElement] { elements }
@@ -116,7 +163,7 @@ final class ContentViewModel: ObservableObject {
 
     // MARK: Internal helpers -----------------------------------------------
 
-    /// Called by Open-panel or drag-and-drop.
+    /// Called by Open-panel, drag-and-drop, or the recents menu.
     func openTemplate(at url: URL) {
         let needsStop = url.startAccessingSecurityScopedResource()
         defer { if needsStop { url.stopAccessingSecurityScopedResource() } }
@@ -125,9 +172,144 @@ final class ContentViewModel: ObservableObject {
         do {
             elements = try parser.parse(templateURL: url)
             errorMessage = nil
+            rememberRecent(url: url)
         } catch {
             elements = [.plainText(content: "Failed to load template.")]
             errorMessage = "Failed to load template: \(error.localizedDescription)"
         }
+    }
+
+    // MARK: Recents API -----------------------------------------------------
+
+    /// Store (or refresh) a recent template entry, keeping a max of `recentsLimit`.
+    func rememberRecent(url: URL) {
+        do {
+            let bookmark = try url.bookmarkData(options: [.withSecurityScope],
+                                                includingResourceValuesForKeys: nil,
+                                                relativeTo: nil)
+            var list = recentTemplates
+            let name = url.lastPathComponent
+
+            // Preserve pinned state if we already know this template by name
+            let wasPinned = list.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.pinned ?? false
+
+            // Deduplicate by name and (best-effort) bookmark bytes.
+            list.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+            if let idx = list.firstIndex(where: { $0.bookmark == bookmark }) {
+                list.remove(at: idx)
+            }
+
+            // Insert newest at front
+            list.insert(RecentTemplate(name: name,
+                                       bookmark: bookmark,
+                                       lastUsed: Date(),
+                                       pinned: wasPinned),
+                        at: 0)
+
+            recentTemplates = list
+            persistRecents()
+        } catch {
+            // Non-fatal; surface a soft error.
+            self.errorMessage = "Could not save recent template: \(error.localizedDescription)"
+        }
+    }
+
+    /// Open a recent template from its bookmark.
+    func openRecent(_ item: RecentTemplate) {
+        do {
+            var isStale = false
+            let url = try URL(resolvingBookmarkData: item.bookmark,
+                              options: [.withSecurityScope],
+                              relativeTo: nil,
+                              bookmarkDataIsStale: &isStale)
+            openTemplate(at: url)
+            // Re-remember to bump recency and refresh a stale bookmark.
+            rememberRecent(url: url)
+        } catch {
+            self.errorMessage = "Unable to open recent template: \(error.localizedDescription)"
+        }
+    }
+
+    /// Reveal a recent item in Finder.
+    func revealRecent(_ item: RecentTemplate) {
+        do {
+            var isStale = false
+            let url = try URL(resolvingBookmarkData: item.bookmark,
+                              options: [.withSecurityScope],
+                              relativeTo: nil,
+                              bookmarkDataIsStale: &isStale)
+            let needsStop = url.startAccessingSecurityScopedResource()
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            if needsStop { url.stopAccessingSecurityScopedResource() }
+            if isStale { rememberRecent(url: url) }
+        } catch {
+            self.errorMessage = "Unable to reveal in Finder: \(error.localizedDescription)"
+        }
+    }
+
+    /// Toggle pin/unpin for a recent entry.
+    func togglePinRecent(_ item: RecentTemplate) {
+        if let idx = recentTemplates.firstIndex(where: { $0.name.caseInsensitiveCompare(item.name) == .orderedSame }) {
+            recentTemplates[idx].pinned.toggle()
+            persistRecents()
+        }
+    }
+
+    /// Remove all stored recent templates.
+    func clearRecentTemplates() {
+        recentTemplates.removeAll()
+        UserDefaults.standard.removeObject(forKey: recentsKey)
+        kvs.removeObject(forKey: recentsKey)
+        kvs.synchronize()
+    }
+
+    private func persistRecents() {
+        // Sort pinned first, then by lastUsed desc; trim to recentsLimit.
+        recentTemplates.sort { lhs, rhs in
+            if lhs.pinned != rhs.pinned { return lhs.pinned && !rhs.pinned }
+            return lhs.lastUsed > rhs.lastUsed
+        }
+        if recentTemplates.count > recentsLimit {
+            recentTemplates = Array(recentTemplates.prefix(recentsLimit))
+        }
+        do {
+            let data = try JSONEncoder().encode(recentTemplates)
+            UserDefaults.standard.set(data, forKey: recentsKey)
+            kvs.set(data, forKey: recentsKey)
+            kvs.synchronize()
+        } catch {
+            // Non-fatal; do not block UI.
+        }
+    }
+
+    private func loadRecents() {
+        guard let data = UserDefaults.standard.data(forKey: recentsKey) else { return }
+        if let decoded = try? JSONDecoder().decode([RecentTemplate].self, from: data) {
+            recentTemplates = Array(decoded.sorted(by: { (l, r) -> Bool in
+                if l.pinned != r.pinned { return l.pinned && !r.pinned }
+                return l.lastUsed > r.lastUsed
+            }).prefix(recentsLimit))
+        } else {
+            // If decoding fails, clear the corrupted data.
+            UserDefaults.standard.removeObject(forKey: recentsKey)
+        }
+    }
+
+    private func syncFromKVSIfLocalEmpty() {
+        guard recentTemplates.isEmpty, let data = kvs.data(forKey: recentsKey) else { return }
+        if let decoded = try? JSONDecoder().decode([RecentTemplate].self, from: data) {
+            recentTemplates = Array(decoded.sorted(by: { (l, r) -> Bool in
+                if l.pinned != r.pinned { return l.pinned && !r.pinned }
+                return l.lastUsed > r.lastUsed
+            }).prefix(recentsLimit))
+        }
+    }
+
+    @objc private func kvStoreChanged(_ note: Notification) {
+        guard let reason = note.userInfo?[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int,
+              reason == NSUbiquitousKeyValueStoreServerChange ||
+              reason == NSUbiquitousKeyValueStoreInitialSyncChange else { return }
+        // Only adopt iCloud data if we currently have none (avoid clobbering local)
+        syncFromKVSIfLocalEmpty()
     }
 }
