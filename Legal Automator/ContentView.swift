@@ -3,6 +3,8 @@
 //  Legal Automator
 //
 //  Created by Rodney Serkowski on 27/7/2025.
+//  Updated: 04/09/2025 – remove _viewModel.wrappedValue usage, wire isGenerating,
+//  add keyboard shortcuts, and polish drop target visuals.
 //
 
 import SwiftUI
@@ -15,45 +17,63 @@ struct ContentView: View {
         VStack(spacing: 0) {
             // Header area
             headerView
-            
+
             Divider()
 
             // Main content area
-            if _viewModel.wrappedValue.templateURL == nil {
+            if viewModel.templateURL == nil {
                 DropTargetView(
                     promptTitle: "Document Automator",
                     promptSubtitle: "Drop a .docx here or click Select Template…",
-                    onDropURL: { url in _viewModel.wrappedValue.openTemplate(at: url) }
+                    onDropURL: { url in viewModel.openTemplate(at: url) }
                 ) {
-                    Button("Select Template...") { _viewModel.wrappedValue.selectTemplate() }
+                    Button("Select Template…") {
+                        viewModel.selectTemplate()
+                    }
+                    .keyboardShortcut("o", modifiers: [.command])
+                    .help("Open a .docx template (⌘O)")
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 // Show the questionnaire form once a template is loaded
-                QuestionnaireView(elements: _viewModel.wrappedValue.templateElements, answers: $viewModel.answers)
+                QuestionnaireView(
+                    elements: viewModel.templateElements,
+                    answers: $viewModel.answers
+                )
             }
         }
+        // Error alert (real errors only; progress uses isGenerating)
         .alert("Error", isPresented: Binding(
-            get: { _viewModel.wrappedValue.errorMessage != nil },
-            set: { newValue in if newValue == false { _viewModel.wrappedValue.errorMessage = nil } }
+            get: { viewModel.errorMessage != nil },
+            set: { newValue in if newValue == false { viewModel.errorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { _viewModel.wrappedValue.errorMessage = nil }
+            Button("OK", role: .cancel) { viewModel.errorMessage = nil }
         } message: {
-            Text(_viewModel.wrappedValue.errorMessage ?? "An unknown error occurred.")
+            Text(viewModel.errorMessage ?? "An unknown error occurred.")
         }
     }
 
     private var headerView: some View {
-        HStack {
-            Text(_viewModel.wrappedValue.templateURL?.lastPathComponent ?? "No Template Selected")
+        HStack(spacing: 12) {
+            Text(viewModel.templateURL?.lastPathComponent ?? "No Template Selected")
                 .font(.headline)
                 .lineLimit(1)
                 .truncationMode(.middle)
 
             Spacer()
 
-            Button("Generate Document") { _viewModel.wrappedValue.generateDocument() }
-                .disabled(_viewModel.wrappedValue.templateURL == nil)
+            if viewModel.isGenerating {
+                ProgressView()
+                    .controlSize(.small)
+                    .help("Generating the merged document…")
+            }
+
+            Button("Generate Document") {
+                viewModel.generateDocument()
+            }
+            .disabled(viewModel.templateURL == nil || viewModel.isGenerating)
+            .keyboardShortcut("e", modifiers: [.command])
+            .help("Generate a merged Word document (⌘E)")
         }
         .padding()
         .frame(height: 55)
@@ -72,8 +92,10 @@ private struct DropTargetView<Footer: View>: View {
     var body: some View {
         VStack(spacing: 16) {
             Spacer(minLength: 0)
+
             Text(promptTitle)
                 .font(.largeTitle)
+
             Text(promptSubtitle)
                 .foregroundStyle(.secondary)
 
@@ -85,9 +107,12 @@ private struct DropTargetView<Footer: View>: View {
                         RoundedRectangle(cornerRadius: 12)
                             .fill(isTargeted ? Color.accentColor.opacity(0.1) : Color.clear)
                     )
+
                 VStack(spacing: 8) {
                     Image(systemName: "doc.badge.plus")
                         .font(.system(size: 36))
+                        .accessibilityHidden(true)
+
                     Text("Drop .docx file here")
                         .font(.headline)
                         .foregroundStyle(.secondary)
@@ -113,6 +138,7 @@ private struct DropTargetView<Footer: View>: View {
             }
 
             footer()
+
             Spacer(minLength: 0)
         }
         .padding()
