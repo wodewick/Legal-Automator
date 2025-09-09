@@ -161,6 +161,48 @@ final class ContentViewModel: ObservableObject {
         }
     }
 
+    /// Merge to a temporary file and open it for a quick preview (non-destructive).
+    /// This does not prompt for a save location and respects the current answers snapshot.
+    /// The file will be created in the user's temporary directory with a unique name.
+    @MainActor
+    func previewDocument() {
+        guard let tplURL = templateURL else {
+            errorMessage = "Please select a template before previewing a document."
+            return
+        }
+
+        // Snapshot answers to avoid races.
+        let answersSnapshot = self.answers
+        self.errorMessage = nil
+        self.isGenerating = true
+
+        // Create a unique temporary destination with .docx extension
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let fileName = "Preview-" + UUID().uuidString + ".docx"
+        let tempURL = tempDir.appendingPathComponent(fileName)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let finalURL = try GeneratorService()
+                    .generate(templateURL: tplURL,
+                              answers: answersSnapshot,
+                              destinationURL: tempURL)
+
+                DispatchQueue.main.async {
+                    self.isGenerating = false
+                    self.errorMessage = nil
+                    // Open with the default .docx handler (e.g., Word/Pages). Non-destructive preview.
+                    NSWorkspace.shared.open(finalURL)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isGenerating = false
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
     // MARK: Internal helpers -----------------------------------------------
 
     /// Called by Open-panel, drag-and-drop, or the recents menu.
