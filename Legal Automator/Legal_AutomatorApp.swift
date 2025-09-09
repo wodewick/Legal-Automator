@@ -54,7 +54,7 @@ struct AppSettingsView: View {
 @main
 struct LegalAutomatorApp: App {
     @StateObject private var viewModel = ContentViewModel()
-    @NSApplicationDelegateAdaptor(AppDelegate) private var appDelegate
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
         WindowGroup {
