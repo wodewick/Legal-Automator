@@ -166,18 +166,21 @@ private struct DropTargetView<Footer: View>: View {
             }
             .frame(maxWidth: 460, minHeight: 160)
             .onDrop(of: [UTType.fileURL], isTargeted: $isTargeted) { providers in
-                // Attempt to load the first file URL provider
+                // Accept a dropped file URL and pass it upstream with security-scoped access
                 guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }) else {
                     return false
                 }
                 provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
                     guard error == nil else { return }
                     let url: URL? = (item as? URL) ?? (item as? NSURL)?.absoluteURL
-                    if let url, url.pathExtension.lowercased() == "docx" {
-                        DispatchQueue.main.async {
-                            onDropURL(url)
-                        }
+                    guard let url, url.pathExtension.lowercased() == "docx" else { return }
+
+                    var didAccess = false
+                    if url.startAccessingSecurityScopedResource() { didAccess = true }
+                    DispatchQueue.main.async {
+                        onDropURL(url)
                     }
+                    if didAccess { url.stopAccessingSecurityScopedResource() }
                 }
                 return true
             }

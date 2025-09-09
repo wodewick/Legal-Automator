@@ -64,17 +64,30 @@ final class ContentViewModel: ObservableObject {
     @Published private(set) var recentTemplates: [RecentTemplate] = []
     private let recentsKey = "RecentTemplateBookmarksV1"
     private let recentsLimit = 5
-    private let kvs = NSUbiquitousKeyValueStore.default
+    private let kvs: NSUbiquitousKeyValueStore? = {
+        if FileManager.default.ubiquityIdentityToken != nil {
+            return NSUbiquitousKeyValueStore.default
+        } else {
+            print("iCloud not available, using local storage only")
+            return nil
+        }
+    }()
 
     init() {
         loadRecents()
         // Best-effort: adopt iCloud if we have nothing local
         syncFromKVSIfLocalEmpty()
-        NotificationCenter.default.addObserver(self,
-                                               selector: #selector(kvStoreChanged(_:)),
-                                               name: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
-                                               object: kvs)
-        kvs.synchronize()
+
+        // Only register for notifications if KVS is available
+        if let kvs = kvs {
+            NotificationCenter.default.addObserver(self,
+                                                   selector: #selector(kvStoreChanged(_:)),
+                                                   name: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+                                                   object: kvs)
+            kvs.synchronize()
+        }
+
+        diagnosticCheck()
     }
 
     deinit {
@@ -301,8 +314,8 @@ final class ContentViewModel: ObservableObject {
     func clearRecentTemplates() {
         recentTemplates.removeAll()
         UserDefaults.standard.removeObject(forKey: recentsKey)
-        kvs.removeObject(forKey: recentsKey)
-        kvs.synchronize()
+        kvs?.removeObject(forKey: recentsKey)
+        kvs?.synchronize()
     }
 
     private func persistRecents() {
@@ -317,8 +330,8 @@ final class ContentViewModel: ObservableObject {
         do {
             let data = try JSONEncoder().encode(recentTemplates)
             UserDefaults.standard.set(data, forKey: recentsKey)
-            kvs.set(data, forKey: recentsKey)
-            kvs.synchronize()
+            kvs?.set(data, forKey: recentsKey)
+            kvs?.synchronize()
         } catch {
             // Non-fatal; do not block UI.
         }
@@ -338,7 +351,7 @@ final class ContentViewModel: ObservableObject {
     }
 
     private func syncFromKVSIfLocalEmpty() {
-        guard recentTemplates.isEmpty, let data = kvs.data(forKey: recentsKey) else { return }
+        guard recentTemplates.isEmpty, let kvs = kvs, let data = kvs.data(forKey: recentsKey) else { return }
         if let decoded = try? JSONDecoder().decode([RecentTemplate].self, from: data) {
             recentTemplates = Array(decoded.sorted(by: { (l, r) -> Bool in
                 if l.pinned != r.pinned { return l.pinned && !r.pinned }
@@ -353,5 +366,16 @@ final class ContentViewModel: ObservableObject {
               reason == NSUbiquitousKeyValueStoreInitialSyncChange else { return }
         // Only adopt iCloud data if we currently have none (avoid clobbering local)
         syncFromKVSIfLocalEmpty()
+    }
+
+    private func diagnosticCheck() {
+        #if DEBUG
+        print("=== Legal Automator Diagnostics ===")
+        print("Bundle ID: \(Bundle.main.bundleIdentifier ?? "Unknown")")
+        print("iCloud Available: \(FileManager.default.ubiquityIdentityToken != nil)")
+        print("Team ID: \(Bundle.main.object(forInfoDictionaryKey: "TeamIdentifierPrefix") ?? "Unknown")")
+        print("Sandbox: \(ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil)")
+        print("===================================")
+        #endif
     }
 }
