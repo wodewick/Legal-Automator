@@ -80,6 +80,14 @@ struct ContentView: View {
                     .accessibilityLabel("Generating document")
             }
 
+            Button("Preview") {
+                viewModel.previewDocument()
+            }
+            .disabled(viewModel.templateURL == nil || viewModel.isGenerating)
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .help("Merge to a temporary document and open it for a quick preview (⇧⌘E)")
+            .accessibilityLabel("Preview Merged Document")
+
             Button("Generate Document") {
                 viewModel.generateDocument()
             }
