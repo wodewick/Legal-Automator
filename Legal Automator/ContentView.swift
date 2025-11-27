@@ -209,12 +209,9 @@ private struct DropTargetView<Footer: View>: View {
                     let url: URL? = (item as? URL) ?? (item as? NSURL)?.absoluteURL
                     guard let url, url.pathExtension.lowercased() == "docx" else { return }
 
-                    var didAccess = false
-                    if url.startAccessingSecurityScopedResource() { didAccess = true }
-                    DispatchQueue.main.async {
+                    Task { @MainActor in
                         onDropURL(url)
                     }
-                    if didAccess { url.stopAccessingSecurityScopedResource() }
                 }
                 return true
             }
