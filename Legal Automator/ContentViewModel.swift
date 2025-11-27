@@ -12,6 +12,7 @@ import Foundation
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import Combine
 
 // MARK: - Recent Templates Model
 struct RecentTemplate: Codable, Equatable {
@@ -59,6 +60,12 @@ final class ContentViewModel: ObservableObject {
     @Published var errorMessage: String?
     /// Busy flag for long-running work (e.g., generation). Views can show a spinner.
     @Published var isGenerating: Bool = false
+    /// URL for QuickLook preview
+    @Published var previewURL: URL?
+    /// Progress message for user feedback
+    @Published var progressMessage: String?
+    /// Progress value (0.0 to 1.0) for determinate progress
+    @Published var progressValue: Double?
 
     // MARK: Recent Templates
     @Published private(set) var recentTemplates: [RecentTemplate] = []
@@ -72,6 +79,12 @@ final class ContentViewModel: ObservableObject {
             return nil
         }
     }()
+
+    // MARK: Answer Persistence
+    @Published var hasUnsavedChanges: Bool = false
+    private var autoSaveTimer: Timer?
+    private let autoSaveInterval: TimeInterval = 30.0 // Auto-save every 30 seconds
+    private var cancellables = Set<AnyCancellable>()
 
     init() {
         loadRecents()
@@ -87,10 +100,19 @@ final class ContentViewModel: ObservableObject {
             kvs.synchronize()
         }
 
+        // Watch for answer changes
+        $answers
+            .dropFirst() // Ignore initial value
+            .sink { [weak self] _ in
+                self?.hasUnsavedChanges = true
+            }
+            .store(in: &cancellables)
+
         diagnosticCheck()
     }
 
     deinit {
+        stopAutoSaveTimer()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -152,22 +174,48 @@ final class ContentViewModel: ObservableObject {
         // Update UI state.
         self.errorMessage = nil
         self.isGenerating = true
+        self.progressMessage = "Preparing document..."
+        self.progressValue = 0.0
 
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task {
             do {
-                let finalURL = try GeneratorService()
+                // Progress: Reading template
+                await MainActor.run {
+                    self.progressMessage = "Reading template..."
+                    self.progressValue = 0.33
+                }
+
+                // Progress: Merging answers
+                await MainActor.run {
+                    self.progressMessage = "Merging answers..."
+                    self.progressValue = 0.66
+                }
+
+                let finalURL = try await GeneratorService()
                     .generate(templateURL: tplURL,
                               answers: answersSnapshot,
                               destinationURL: saveURL)
 
-                DispatchQueue.main.async {
+                // Progress: Complete
+                await MainActor.run {
+                    self.progressMessage = "Complete!"
+                    self.progressValue = 1.0
                     self.isGenerating = false
                     self.errorMessage = nil
                     NSWorkspace.shared.open(finalURL)
                 }
+
+                // Clear progress after a brief delay
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                await MainActor.run {
+                    self.progressMessage = nil
+                    self.progressValue = nil
+                }
             } catch {
-                DispatchQueue.main.async {
+                await MainActor.run {
                     self.isGenerating = false
+                    self.progressMessage = nil
+                    self.progressValue = nil
                     self.errorMessage = error.localizedDescription
                 }
             }
@@ -178,7 +226,7 @@ final class ContentViewModel: ObservableObject {
     /// This does not prompt for a save location and respects the current answers snapshot.
     /// The file will be created in the user's temporary directory with a unique name.
     @MainActor
-    func previewDocument() {
+    func previewDocument(onComplete: @escaping () -> Void = {}) {
         guard let tplURL = templateURL else {
             errorMessage = "Please select a template before previewing a document."
             return
@@ -188,28 +236,46 @@ final class ContentViewModel: ObservableObject {
         let answersSnapshot = self.answers
         self.errorMessage = nil
         self.isGenerating = true
+        self.progressMessage = "Preparing preview..."
+        self.progressValue = 0.0
 
         // Create a unique temporary destination with .docx extension
         let tempDir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         let fileName = "Preview-" + UUID().uuidString + ".docx"
         let tempURL = tempDir.appendingPathComponent(fileName)
 
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task {
             do {
-                let finalURL = try GeneratorService()
+                await MainActor.run {
+                    self.progressMessage = "Generating preview..."
+                    self.progressValue = 0.5
+                }
+
+                let finalURL = try await GeneratorService()
                     .generate(templateURL: tplURL,
                               answers: answersSnapshot,
                               destinationURL: tempURL)
 
-                DispatchQueue.main.async {
+                await MainActor.run {
+                    self.progressMessage = "Opening preview..."
+                    self.progressValue = 0.9
                     self.isGenerating = false
                     self.errorMessage = nil
-                    // Open with the default .docx handler (e.g., Word/Pages). Non-destructive preview.
-                    NSWorkspace.shared.open(finalURL)
+                    self.previewURL = finalURL
+                    onComplete()
+                }
+
+                // Clear progress after a brief delay
+                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                await MainActor.run {
+                    self.progressMessage = nil
+                    self.progressValue = nil
                 }
             } catch {
-                DispatchQueue.main.async {
+                await MainActor.run {
                     self.isGenerating = false
+                    self.progressMessage = nil
+                    self.progressValue = nil
                     self.errorMessage = error.localizedDescription
                 }
             }
@@ -224,14 +290,104 @@ final class ContentViewModel: ObservableObject {
         defer { if needsStop { url.stopAccessingSecurityScopedResource() } }
 
         templateURL = url
-        do {
-            elements = try parser.parse(templateURL: url)
-            errorMessage = nil
-            rememberRecent(url: url)
-        } catch {
-            elements = [.plainText(content: "Failed to load template.")]
-            errorMessage = "Failed to load template: \(error.localizedDescription)"
+
+        Task {
+            do {
+                elements = try await parser.parse(templateURL: url)
+                await MainActor.run {
+                    errorMessage = nil
+                    rememberRecent(url: url)
+
+                    // Try to load auto-saved answers
+                    loadAutoSavedAnswers()
+
+                    // Start auto-save timer
+                    startAutoSaveTimer()
+                }
+            } catch {
+                await MainActor.run {
+                    elements = [.plainText(content: "Failed to load template.")]
+                    errorMessage = "Failed to load template: \(error.localizedDescription)"
+                }
+            }
         }
+    }
+
+    // MARK: Answer Persistence Methods -------------------------------------
+
+    /// Manually save current answers
+    @MainActor
+    func saveAnswers() {
+        guard let url = templateURL else {
+            errorMessage = "No template selected."
+            return
+        }
+
+        do {
+            let savedURL = try PersistenceService.saveAnswers(answers, for: url)
+            hasUnsavedChanges = false
+            print("✅ Answers saved to: \(savedURL.lastPathComponent)")
+        } catch {
+            errorMessage = "Failed to save answers: \(error.localizedDescription)"
+        }
+    }
+
+    /// Load answers from a file
+    @MainActor
+    func loadAnswers(from fileURL: URL) {
+        do {
+            answers = try PersistenceService.loadAnswers(from: fileURL)
+            hasUnsavedChanges = false
+            print("✅ Answers loaded from: \(fileURL.lastPathComponent)")
+        } catch {
+            errorMessage = "Failed to load answers: \(error.localizedDescription)"
+        }
+    }
+
+    /// Auto-save current answers
+    private func autoSaveAnswers() {
+        guard let url = templateURL, !answers.isEmpty else { return }
+
+        do {
+            try PersistenceService.autoSaveAnswers(answers, for: url)
+            print("💾 Auto-saved answers")
+        } catch {
+            print("⚠️ Auto-save failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Load auto-saved answers if they exist
+    private func loadAutoSavedAnswers() {
+        guard let url = templateURL else { return }
+
+        do {
+            if let savedAnswers = try PersistenceService.loadAutoSave(for: url) {
+                answers = savedAnswers
+                hasUnsavedChanges = false
+                print("✅ Loaded auto-saved answers")
+            }
+        } catch {
+            print("⚠️ Failed to load auto-save: \(error.localizedDescription)")
+        }
+    }
+
+    /// Start the auto-save timer
+    private func startAutoSaveTimer() {
+        autoSaveTimer?.invalidate()
+        autoSaveTimer = Timer.scheduledTimer(withTimeInterval: autoSaveInterval, repeats: true) { [weak self] _ in
+            self?.autoSaveAnswers()
+        }
+    }
+
+    /// Stop the auto-save timer
+    private func stopAutoSaveTimer() {
+        autoSaveTimer?.invalidate()
+        autoSaveTimer = nil
+    }
+
+    /// Mark answers as changed (for tracking unsaved changes)
+    func markAnswersChanged() {
+        hasUnsavedChanges = true
     }
 
     // MARK: Recents API -----------------------------------------------------

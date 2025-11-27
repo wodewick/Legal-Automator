@@ -8,9 +8,11 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import QuickLookUI
 
 struct ContentView: View {
     @EnvironmentObject private var viewModel: ContentViewModel
+    @State private var showPreview = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,6 +59,12 @@ struct ContentView: View {
         } message: {
             Text(viewModel.errorMessage ?? "An unknown error occurred.")
         }
+        // QuickLook preview sheet
+        .sheet(isPresented: $showPreview) {
+            if let previewURL = viewModel.previewURL {
+                PreviewSheet(previewURL: previewURL)
+            }
+        }
     }
 
     private var headerView: some View {
@@ -74,14 +82,40 @@ struct ContentView: View {
             Spacer()
 
             if viewModel.isGenerating {
-                ProgressView()
-                    .controlSize(.small)
-                    .help("Generating the merged document…")
-                    .accessibilityLabel("Generating document")
+                if let progress = viewModel.progressValue {
+                    ProgressView(value: progress)
+                        .frame(width: 100)
+                        .help(viewModel.progressMessage ?? "Processing...")
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help(viewModel.progressMessage ?? "Processing...")
+                }
+
+                if let message = viewModel.progressMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
+            if viewModel.hasUnsavedChanges {
+                Text("•")
+                    .foregroundStyle(.orange)
+                    .help("You have unsaved changes")
+            }
+
+            Button("Save Answers") {
+                viewModel.saveAnswers()
+            }
+            .disabled(viewModel.templateURL == nil)
+            .keyboardShortcut("s", modifiers: [.command])
+            .help("Save current answers (⌘S)")
+
             Button("Preview") {
-                viewModel.previewDocument()
+                viewModel.previewDocument {
+                    showPreview = true
+                }
             }
             .disabled(viewModel.templateURL == nil || viewModel.isGenerating)
             .keyboardShortcut("e", modifiers: [.command, .shift])
@@ -190,5 +224,46 @@ private struct DropTargetView<Footer: View>: View {
             Spacer(minLength: 0)
         }
         .padding()
+    }
+}
+
+// MARK: - QuickLook Preview Sheet
+private struct PreviewSheet: View {
+    let previewURL: URL
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            QuickLookPreview(url: previewURL)
+                .frame(minWidth: 720, minHeight: 520)
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Close") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding()
+        }
+    }
+}
+
+// MARK: - QuickLook Preview Wrapper
+private struct QuickLookPreview: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> QLPreviewView {
+        let view = QLPreviewView(frame: .zero, style: .normal)!
+        view.autostarts = true
+        view.previewItem = url as NSURL
+        return view
+    }
+
+    func updateNSView(_ nsView: QLPreviewView, context: Context) {
+        nsView.previewItem = url as NSURL
+        nsView.refreshPreviewItem()
     }
 }

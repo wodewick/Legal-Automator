@@ -55,10 +55,10 @@ final class ParserService {
     // Public API ------------------------------------------------------------
 
     /// Parses the provided .docx template and returns a nested element tree.
-    func parse(templateURL: URL) throws -> [TemplateElement] {
+    func parse(templateURL: URL) async throws -> [TemplateElement] {
 
         // 1  Extract WordprocessingML
-        let xmlString = try extractXML(from: templateURL)
+        let xmlString = try await extractXML(from: templateURL)
 
         // 2  Collect contiguous text from all <w:t> nodes
         let documentText = try WordTextCollector.collectText(fromXML: xmlString)
@@ -69,24 +69,26 @@ final class ParserService {
 
     // Private helpers -------------------------------------------------------
 
-    private func extractXML(from url: URL) throws -> String {
-        let archive: Archive
-        do {
-            archive = try Archive(url: url, accessMode: .read)
-        } catch {
-            throw ParserError.notADocx
-        }
-        guard let entry = archive["word/document.xml"] else {
-            throw ParserError.missingDocumentXML
-        }
+    private func extractXML(from url: URL) async throws -> String {
+        return try await Task {
+            let archive: Archive
+            do {
+                archive = try Archive(url: url, accessMode: .read)
+            } catch {
+                throw ParserError.notADocx
+            }
+            guard let entry = archive["word/document.xml"] else {
+                throw ParserError.missingDocumentXML
+            }
 
-        var xmlData = Data()
-        _ = try archive.extract(entry) { xmlData.append($0) }
+            var xmlData = Data()
+            _ = try archive.extract(entry) { xmlData.append($0) }
 
-        guard let xmlString = String(data: xmlData, encoding: .utf8) else {
-            throw ParserError.unreadableXML
-        }
-        return xmlString
+            guard let xmlString = String(data: xmlData, encoding: .utf8) else {
+                throw ParserError.unreadableXML
+            }
+            return xmlString
+        }.value
     }
 
     // ----------------------------------------------------------------------
@@ -183,6 +185,24 @@ final class ParserService {
         array.append(.plainText(id: UUID(), content: text))
     }
 
+    /// Infer the field type from the variable name.
+    private func inferFieldType(from name: String) -> FieldType {
+        let lower = name.lowercased()
+
+        // Check for boolean prefixes
+        if lower.hasPrefix("is_") || lower.hasPrefix("has_") || lower.hasPrefix("flag_") {
+            return .toggle
+        }
+
+        // Check for date suffixes or contains
+        if lower.hasSuffix("_date") || lower.contains("date") {
+            return .date
+        }
+
+        // Default to text
+        return .text
+    }
+
     private func parseVariable(_ body: String) -> TemplateElement {
         let parts = body.components(separatedBy: ",")
         let name = parts[0].trimmingCharacters(in: .whitespaces)
@@ -196,7 +216,11 @@ final class ParserService {
                 hint = trimmed.replacingOccurrences(of: "hint:", with: "").trimmingCharacters(in: .whitespaces)
             }
         }
-        return .variable(id: UUID(), name: name, label: label, hint: hint)
+
+        // Infer field type from variable name
+        let type = inferFieldType(from: name)
+
+        return .variable(id: UUID(), name: name, label: label, hint: hint, type: type)
     }
 
     private func parseNameAndLabel(_ body: String) -> (String, String?) {

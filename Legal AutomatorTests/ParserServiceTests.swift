@@ -33,7 +33,7 @@ final class ParserServiceUnitTests: XCTestCase {
 
     /// Returns true if any element in the array is a `.variable` with the given name.
     private func containsVariable(_ name: String, in elements: [TemplateElement]) -> Bool {
-        elements.contains { if case .variable(_, name, _, _) = $0 { return true }; return false }
+        elements.contains { if case .variable(_, name, _, _, _) = $0 { return true }; return false }
     }
 
     // ---------------------------------------------------------------------
@@ -45,9 +45,9 @@ final class ParserServiceUnitTests: XCTestCase {
         let sig = significant(elements)
         XCTAssertEqual(sig.count, 3)
 
-        guard case .plainText(_, "Hello ")           = sig[0],
-              case .variable(_, "client_name", _, _) = sig[1],
-              case .plainText(_, ".")                = sig[2] else {
+        guard case .plainText(_, "Hello ")              = sig[0],
+              case .variable(_, "client_name", _, _, _) = sig[1],
+              case .plainText(_, ".")                   = sig[2] else {
             return XCTFail("Element sequence mismatch")
         }
     }

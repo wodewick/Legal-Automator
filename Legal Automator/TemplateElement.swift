@@ -10,6 +10,13 @@
 import Foundation
 
 
+/// Field type determines which control is shown in the questionnaire.
+public enum FieldType: Hashable {
+    case text
+    case toggle
+    case date
+}
+
 /// Canonical template model shared by ParserService, the UI, and (later)
 /// GeneratorService.  This replaces the earlier flat model.
 public enum TemplateElement: Identifiable, Hashable {
@@ -21,7 +28,8 @@ public enum TemplateElement: Identifiable, Hashable {
     case variable(id: UUID = UUID(),
                   name: String,
                   label: String?,
-                  hint: String?)
+                  hint: String?,
+                  type: FieldType)
 
     /// A conditional block (originating from [[IF …]] … [[END IF]]).
     case conditional(id: UUID = UUID(),
@@ -40,7 +48,7 @@ public enum TemplateElement: Identifiable, Hashable {
     public var id: UUID {
         switch self {
         case .plainText(let id, _),
-             .variable(let id, _, _, _),
+             .variable(let id, _, _, _, _),
              .conditional(let id, _, _, _),
              .repeatingGroup(let id, _, _, _):
             return id

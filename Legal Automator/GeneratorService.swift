@@ -40,15 +40,16 @@ struct GeneratorService {
     /// - Returns: The final document's URL.
     func generate(templateURL: URL,
                   answers: [String: Any],
-                  destinationURL: URL) throws -> URL {
+                  destinationURL: URL) async throws -> URL {
 
-        // Decide final output path
-        let outputURL: URL = destinationURL.pathExtension.lowercased() == "docx"
-            ? destinationURL
-            : destinationURL.appendingPathComponent(UUID().uuidString + ".docx")
+        return try await Task {
+            // Decide final output path
+            let outputURL: URL = destinationURL.pathExtension.lowercased() == "docx"
+                ? destinationURL
+                : destinationURL.appendingPathComponent(UUID().uuidString + ".docx")
 
-        try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
 
         // Copy template to output
         _ = try? FileManager.default.removeItem(at: outputURL)
@@ -78,13 +79,17 @@ struct GeneratorService {
         let finalData = Data(xml.utf8)
         try archive.addEntry(with: "word/document.xml",
                              type: .file,
-                             uncompressedSize: UInt32(finalData.count),
+                             uncompressedSize: Int64(finalData.count),
                              compressionMethod: .deflate,
+                             bufferSize: 16_384,
                              provider: { position, size in
-                                 finalData.subdata(in: Int(position)..<Int(position + size))
+                                 let start = Int(position)
+                                 let end = min(start + size, finalData.count)
+                                 return finalData.subdata(in: start..<end)
                              })
 
-        return outputURL
+            return outputURL
+        }.value
     }
 
     // MARK: - Replacement pipeline -----------------------------------------
@@ -95,6 +100,7 @@ struct GeneratorService {
         out = replaceVariables(in: out, answers: answers)
         out = processConditionals(in: out, answers: answers)
         out = processRepeats(in: out, answers: answers)
+        out = removeEmptyParagraphs(in: out)
         return out
     }
 
@@ -105,7 +111,16 @@ struct GeneratorService {
         var result = xml
         for match in rx.matches(in: xml, range: NSRange(xml.startIndex..., in: xml)).reversed() {
             let name = (xml as NSString).substring(with: match.range(at: 1))
-            let val  = answers[name].map { String(describing: $0) } ?? ""
+            let val  = answers[name].map { value -> String in
+                // Format dates with Australian locale
+                if let date = value as? Date {
+                    let formatter = DateFormatter()
+                    formatter.dateStyle = .long
+                    formatter.locale = Locale(identifier: "en_AU")
+                    return formatter.string(from: date)
+                }
+                return String(describing: value)
+            } ?? ""
             let escaped = escapeXML(val)
             result.replaceSubrange(Range(match.range, in: result)!, with: escaped)
         }
@@ -164,6 +179,16 @@ struct GeneratorService {
     /// Coalesces split runs so placeholders are contiguous.
     private func coalesceRuns(_ xml: String) -> String {
         let pattern = #"</w:t>\s*</w:r>\s*<w:r[^>]*>\s*<w:t[^>]*>"#
+        let rx = try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        return rx.stringByReplacingMatches(in: xml,
+                                           range: NSRange(xml.startIndex..., in: xml),
+                                           withTemplate: "")
+    }
+
+    /// Removes empty paragraphs that may result from conditional removal.
+    /// This produces cleaner output documents.
+    private func removeEmptyParagraphs(in xml: String) -> String {
+        let pattern = #"<w:p[^>]*>(?:\s|\n|<[^t][^>]*>)*</w:p>"#
         let rx = try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
         return rx.stringByReplacingMatches(in: xml,
                                            range: NSRange(xml.startIndex..., in: xml),
